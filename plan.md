@@ -21,8 +21,10 @@ Drawing-Battle is a real-time 1v1 game: two players get the same prompt, sketch 
 | Matchmaking | Public random queue **and** private room codes |
 | Accounts | Guest play + optional signup to persist win/loss |
 | AI Vision | OpenAI GPT-4o (vision), behind a provider interface for easy swap |
+| Hosting | Azure (production target for the web app and supporting infra) |
+| Release bar | Production-ready for internal/public beta — not a prototype-only scaffold |
 
-**Why these defaults:** Expo matches “modern web and mobile” with one UI. Supabase covers auth, DB, and realtime without a custom socket server while still teaching Postgres and event-driven sync. OpenAI vision is well-documented for doodle-vs-prompt scoring; a thin adapter keeps Gemini/Claude as drop-in replacements.
+**Why these defaults:** Expo matches “modern web and mobile” with one UI. Supabase covers auth, DB, and realtime without a custom socket server while still teaching Postgres and event-driven sync. OpenAI vision is well-documented for doodle-vs-prompt scoring; a thin adapter keeps Gemini/Claude as drop-in replacements. Azure is the production host so the team practices cloud deployment, secrets, and environments alongside the game stack.
 
 ---
 
@@ -201,12 +203,64 @@ supabase/
 
 ---
 
-## Hosting & environments
+## Hosting & environments (Azure)
 
-- **App:** Expo (EAS Build for store binaries later; web via Expo web / hosting)
-- **Backend:** Supabase project (dev + prod)
-- **Secrets:** `OPENAI_API_KEY` only in Edge Function secrets
-- **CI (later):** lint/typecheck; optional Playwright smoke for web lobby
+**Target:** production-ready deployment on **Azure**, with clear separation of **dev** and **prod**.
+
+| Concern | Approach |
+|---------|----------|
+| Web client | Build Expo web export; host as static assets on **Azure Static Web Apps** (or App Service if SSR/proxy needs arise) |
+| Custom domain / HTTPS | Azure-managed TLS; prod custom domain when available |
+| Mobile binaries | **EAS Build** for iOS/Android store or internal distribution; app points at prod Supabase + Azure-fronted config |
+| Backend data/realtime | **Supabase** projects: separate **dev** and **prod** (Auth, Postgres, Realtime, Storage, Edge Functions) |
+| Secrets | `OPENAI_API_KEY` and service keys only in Supabase Edge secrets / Azure Key Vault / SWA app settings — never in client bundles |
+| Config | `EXPO_PUBLIC_*` for public Supabase URL/anon key per environment; no private keys in the app |
+| CI/CD | GitHub Actions → lint/typecheck → build web → deploy to Azure (dev on main/PR preview if enabled; prod on release/tag or protected branch) |
+| Observability | Client error reporting + Azure/SWA diagnostics; match phase and AI latency metrics for success criteria |
+| CORS / API | Edge Functions and Storage configured for prod web origin(s) only |
+
+```mermaid
+flowchart LR
+  subgraph azure [Azure]
+    SWA[Static Web Apps]
+    KV[Key Vault optional]
+    CICD[GitHub Actions]
+  end
+
+  subgraph supabaseProd [Supabase Prod]
+    AuthProd[Auth]
+    DBProd[(Postgres)]
+    EdgeProd[Edge Functions]
+  end
+
+  Users --> SWA
+  SWA --> AuthProd
+  SWA --> EdgeProd
+  CICD --> SWA
+  EdgeProd --> OpenAI[OpenAI]
+  KV -.-> CICD
+```
+
+**Environments:**
+- **Local** — Expo + Supabase local or shared dev project
+- **Dev (Azure)** — continuous deploy for QA; non-prod OpenAI key / spend caps
+- **Prod (Azure)** — protected deploy path, prod Supabase, monitored AI latency and desync metrics
+
+---
+
+## Production-ready bar (v1)
+
+“Production-ready” for Drawing-Battle means a shippable beta, not an unfinished prototype:
+
+- **Reliable game loop** — server-authoritative match phases; reconnect resumes the correct match; no stuck lobby/queue under normal failure
+- **Security** — RLS on all player-facing tables; AI and settlement only via Edge Functions (service role); secrets out of the client; basic rate limits on queue/room create
+- **Ops** — automated Azure deploy; env-specific config; health of deploy pipeline documented in README
+- **Quality** — TypeScript throughout; lint in CI; smoke path for lobby → room/queue → match shell on web
+- **Performance** — AI judging path designed for **under 3 seconds**; canvas usable on mid-tier mobile and desktop web
+- **Observability** — log/measure match completion and scoring latency against README success metrics
+- **Docs** — setup (Supabase, Azure, env vars), run locally, deploy to Azure
+
+Store listing polish and full SLA multi-region HA are **out of scope** for v1; Azure + prod Supabase + the checklist above are in scope.
 
 ---
 
@@ -218,7 +272,8 @@ supabase/
 4. **Canvas & timer** — pen/eraser, 60s server deadline, upload submissions
 5. **Judging** — Edge Function + OpenAI adapter, results screen, W/L updates
 6. **Hardening** — reconnect, timeouts, stale cleanup, latency/desync instrumentation against success metrics
-7. **Polish** — web responsive canvas, onboarding copy, prompt pack, internal beta
+7. **Azure & production** — env config, GitHub Actions → Azure Static Web Apps, secrets, prod Supabase, deploy docs
+8. **Polish** — web responsive canvas, onboarding copy, prompt pack, internal beta on Azure prod
 
 ---
 
@@ -231,9 +286,11 @@ supabase/
 | Queue starvation | Short TTL + “play with friend” rooms as primary path for demos |
 | Canvas perf on web vs native | Prefer Skia/shared path model; test early on both |
 | Guest abuse / spam matches | Rate limits on queue/room create; anon session caps |
+| Azure/Supabase env drift | Separate dev/prod projects; checked-in infra docs; CI deploy only from main/release |
+| Secret leakage in Expo web | Public env vars only for anon keys; OpenAI solely on Edge Functions |
 
 ---
 
 ## Deliverable for this planning step
 
-This document is the approved product and technical plan at the repo root. **No application code, scaffolding, or dependencies** until implementation is separately requested.
+This document is the approved product and technical plan at the repo root (including Azure hosting and a production-ready bar). **No application code, scaffolding, or dependencies** until implementation is separately requested.
