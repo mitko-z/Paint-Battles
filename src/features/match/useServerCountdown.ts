@@ -1,28 +1,27 @@
 import { useEffect, useState } from "react";
 
+function msUntil(endsAt: string | null | undefined, now: number): number {
+  if (!endsAt) return 0;
+  return Math.max(0, new Date(endsAt).getTime() - now);
+}
+
 /** Countdown to an absolute server timestamp (ISO). */
 export function useServerCountdown(endsAt: string | null | undefined) {
-  const [remainingMs, setRemainingMs] = useState(0);
+  // Tick forces re-renders; remaining time is derived synchronously from Date.now()
+  // so the first paint after `endsAt` is set never falsely reports isDone.
+  const [, setTick] = useState(0);
 
   useEffect(() => {
-    if (!endsAt) {
-      setRemainingMs(0);
-      return;
-    }
-
-    const tick = () => {
-      const diff = new Date(endsAt).getTime() - Date.now();
-      setRemainingMs(Math.max(0, diff));
-    };
-
-    tick();
-    const id = setInterval(tick, 200);
+    if (!endsAt) return;
+    const id = setInterval(() => setTick((t) => t + 1), 200);
     return () => clearInterval(id);
   }, [endsAt]);
+
+  const remainingMs = msUntil(endsAt, Date.now());
 
   return {
     remainingMs,
     remainingSec: Math.ceil(remainingMs / 1000),
-    isDone: remainingMs <= 0 && Boolean(endsAt),
+    isDone: Boolean(endsAt) && remainingMs <= 0,
   };
 }

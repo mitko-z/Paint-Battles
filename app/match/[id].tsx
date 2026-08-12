@@ -27,6 +27,7 @@ export default function MatchScreen() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [hasSubmitted, setHasSubmitted] = useState(false);
   const submittedRef = useRef(false);
   const canvasSize = useRef({ width: 360, height: 480 });
 
@@ -78,6 +79,7 @@ export default function MatchScreen() {
   const doSubmit = useCallback(async () => {
     if (!match || !user || submittedRef.current) return;
     submittedRef.current = true;
+    setHasSubmitted(true);
     setSubmitting(true);
     setError(null);
     try {
@@ -97,13 +99,15 @@ export default function MatchScreen() {
       }
     } catch (e) {
       submittedRef.current = false;
+      setHasSubmitted(false);
       setError(e instanceof Error ? e.message : "Submit failed");
     } finally {
       setSubmitting(false);
     }
   }, [match, user, strokes, refresh]);
 
-  // Auto-submit when entering submitting or timer ends while drawing
+  // Auto-submit only after the shared timer ends (or match is in submitting).
+  // Early Submit from one client must not force the other to submit.
   useEffect(() => {
     if (!match) return;
     if (match.status === "submitting" || (match.status === "drawing" && drawingClock.isDone)) {
@@ -125,6 +129,7 @@ export default function MatchScreen() {
     );
   }
 
+  const drawingOpen = match.status === "drawing" && !hasSubmitted;
   const showCanvas = match.status === "countdown" || match.status === "drawing";
 
   return (
@@ -136,7 +141,11 @@ export default function MatchScreen() {
           <Text style={styles.timer}>Starting in {Math.max(countdown.remainingSec, 0)}</Text>
         ) : null}
         {match.status === "drawing" ? (
-          <Text style={styles.timer}>{Math.max(drawingClock.remainingSec, 0)}s</Text>
+          <Text style={styles.timer}>
+            {hasSubmitted
+              ? `Submitted — ${Math.max(drawingClock.remainingSec, 0)}s left for opponent`
+              : `${Math.max(drawingClock.remainingSec, 0)}s`}
+          </Text>
         ) : null}
         {match.status === "submitting" || submitting ? (
           <Text style={styles.timer}>Submitting…</Text>
@@ -155,7 +164,7 @@ export default function MatchScreen() {
           >
             <DrawingCanvas
               tool={tool}
-              disabled={match.status !== "drawing" || submitting}
+              disabled={!drawingOpen || submitting}
               onStrokesChange={setStrokes}
             />
           </View>
@@ -173,9 +182,9 @@ export default function MatchScreen() {
               onPress={() => setTool("eraser")}
             />
             <PrimaryButton
-              label="Submit"
+              label={hasSubmitted ? "Submitted" : "Submit"}
               style={styles.toolBtn}
-              disabled={match.status !== "drawing" || submitting}
+              disabled={!drawingOpen || submitting}
               loading={submitting}
               onPress={() => void doSubmit()}
             />

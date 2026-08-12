@@ -449,9 +449,8 @@ begin
     raise exception 'Submission deadline passed';
   end if;
 
-  if m.status = 'drawing' then
-    update public.matches set status = 'submitting' where id = m.id;
-  end if;
+  -- Early submit keeps status as drawing so the opponent can keep drawing
+  -- until they submit or the shared timer ends (advance_match_phases).
 
   insert into public.match_submissions (match_id, user_id, storage_path)
   values (p_match_id, uid, p_storage_path)
@@ -464,11 +463,12 @@ begin
   from public.match_submissions
   where match_id = p_match_id;
 
+  -- Both finished (early or after timeout) → judging
   if submission_count >= 2 then
     update public.matches
     set status = 'judging'
     where id = p_match_id
-      and status = 'submitting';
+      and status in ('drawing', 'submitting');
   end if;
 
   return submission;
