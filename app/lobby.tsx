@@ -116,6 +116,13 @@ export default function LobbyScreen() {
               }
             />
           </View>
+          {profile?.is_guest ? (
+            <PrimaryButton
+              label="Sign in"
+              variant="ghost"
+              onPress={() => router.push("/auth")}
+            />
+          ) : null}
           <PrimaryButton
             label="Profile"
             variant="ghost"

@@ -1,6 +1,7 @@
 import "react-native-url-polyfill/auto";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import * as Linking from "expo-linking";
 import { Platform } from "react-native";
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? "";
@@ -50,3 +51,16 @@ export const supabase: SupabaseClient = createClient(
 export function getFunctionsUrl(path: string) {
   return `${supabaseUrl.replace(/\/$/, "")}/functions/v1/${path}`;
 }
+
+/** Deep link the auth email/OAuth flows redirect back to once a session is issued. */
+export function getAuthRedirectUrl() {
+  return Linking.createURL("auth/callback");
+}
+
+// Social sign-in buttons only render once the developer has actually enabled the
+// provider in the Supabase dashboard (and, for Apple, registered a Services ID) —
+// otherwise they'd be dead buttons out of the box.
+export const oauthProviders = {
+  google: process.env.EXPO_PUBLIC_ENABLE_GOOGLE_AUTH === "true",
+  apple: process.env.EXPO_PUBLIC_ENABLE_APPLE_AUTH === "true",
+};

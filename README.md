@@ -35,11 +35,12 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
 ### 2. Supabase
 
-1. In the Supabase dashboard → **Authentication → Providers**, enable **Anonymous** sign-ins.
+1. In the Supabase dashboard → **Authentication → Providers**, enable **Anonymous** sign-ins (guest play) and **Email** (magic link — on by default).
 2. Run **every** file in [`supabase/migrations/`](supabase/migrations/), in filename order — not just the first one. Easiest via `supabase db push` / `supabase migration up`, which applies all pending migrations automatically; if pasting into the SQL editor by hand, run each file in order:
    - [`20260311000000_initial.sql`](supabase/migrations/20260311000000_initial.sql)
    - [`20260312000000_early_submit_wait.sql`](supabase/migrations/20260312000000_early_submit_wait.sql) — fixes a bug where one player submitting early ended the match for both, ignoring remaining time. Any Supabase project missing this migration will reproduce that bug.
-3. Deploy the judge function:
+3. In **Authentication → URL Configuration → Redirect URLs**, add `drawingbattle://auth/callback` — this is what the app's `/auth` screen redirects back to after a magic-link email or social sign-in. Local Supabase CLI users already get this from [`supabase/config.toml`](supabase/config.toml); it must be added by hand on a hosted project.
+4. Deploy the judge function:
 
 ```bash
 supabase functions deploy judge-match
@@ -47,6 +48,32 @@ supabase secrets set OPENAI_API_KEY=sk-...
 ```
 
 Without `OPENAI_API_KEY`, judging still completes using a deterministic heuristic so you can test the full loop locally.
+
+#### Optional: Google / Apple sign-in
+
+The `/auth` screen's "Continue with Google/Apple" buttons only appear once you enable the matching flag in `.env` — they stay hidden otherwise so you never ship a dead button.
+
+1. In the Supabase dashboard → **Authentication → Providers**, enable **Google** and/or **Apple** and fill in their client credentials (see [Supabase's Google guide](https://supabase.com/docs/guides/auth/social-login/auth-google) / [Apple guide](https://supabase.com/docs/guides/auth/social-login/auth-apple)). Both need the same redirect URL from step 3 above.
+2. In `.env`, flip the corresponding flag:
+
+```
+EXPO_PUBLIC_ENABLE_GOOGLE_AUTH=true
+EXPO_PUBLIC_ENABLE_APPLE_AUTH=true
+```
+
+3. Restart Expo so the env change is picked up.
+
+### Updating Supabase later (schema changes)
+
+When you add a new migration file under `supabase/migrations/`:
+
+```bash
+supabase db push          # apply to the linked hosted project
+# or, for local dev:
+supabase migration up
+```
+
+Update the shared `SQL` in the initial migration only for local/dev resets — for a project already running in production, always add a **new** migration file rather than editing an old one, so `supabase db push` applies just the diff.
 
 ### 3. Run the app
 
@@ -131,11 +158,12 @@ Install the downloaded `.apk` directly on an Android device (enable "install fro
 ## App routes
 
 - `/lobby` — play, create/join room, queue
+- `/auth` — sign in / create account (email magic link, optional Google/Apple), upgrades the current guest account in place
 - `/queue` — public matchmaking
 - `/room` — private room waiting
 - `/match/[id]` — countdown + canvas + submit
 - `/results/[id]` — scores and winner
-- `/profile` — W/L, name, email magic link upgrade
+- `/profile` — W/L, display name, link to `/auth`
 
 ---
 

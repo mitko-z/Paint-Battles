@@ -3,7 +3,9 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
+  type TextInputProps,
   type ViewStyle,
 } from "react-native";
 import { colors, fonts } from "@/lib/theme";
@@ -78,6 +80,61 @@ export function ErrorText({ message }: { message?: string | null }) {
   return <Text style={styles.error}>{message}</Text>;
 }
 
+export function SuccessText({ message }: { message?: string | null }) {
+  if (!message) return null;
+  return <Text style={styles.success}>{message}</Text>;
+}
+
+export function TextField({
+  label,
+  style,
+  ...inputProps
+}: { label?: string; style?: ViewStyle } & TextInputProps) {
+  return (
+    <View style={style}>
+      {label ? <Text style={styles.fieldLabel}>{label}</Text> : null}
+      <TextInput placeholderTextColor={colors.inkMuted} style={styles.field} {...inputProps} />
+    </View>
+  );
+}
+
+export function SegmentedTabs<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <View style={styles.tabs}>
+      {options.map((opt) => {
+        const active = opt.value === value;
+        return (
+          <Pressable
+            key={opt.value}
+            onPress={() => onChange(opt.value)}
+            style={[styles.tab, active && styles.tabActive]}
+          >
+            <Text style={[styles.tabText, active && styles.tabTextActive]}>{opt.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+export function Divider({ label }: { label?: string }) {
+  return (
+    <View style={styles.dividerRow}>
+      <View style={styles.dividerLine} />
+      {label ? <Text style={styles.dividerLabel}>{label}</Text> : null}
+      <View style={styles.dividerLine} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
@@ -141,5 +198,64 @@ const styles = StyleSheet.create({
     color: colors.danger,
     marginTop: 8,
     fontSize: 14,
+  },
+  success: {
+    color: colors.success,
+    marginTop: 8,
+    fontSize: 14,
+  },
+  fieldLabel: {
+    color: colors.inkMuted,
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 6,
+  },
+  field: {
+    borderWidth: 1.5,
+    borderColor: colors.ink,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    minHeight: 50,
+    fontSize: 16,
+    color: colors.ink,
+    backgroundColor: colors.white,
+  },
+  tabs: {
+    flexDirection: "row",
+    backgroundColor: colors.paperDeep,
+    borderRadius: 10,
+    padding: 4,
+    gap: 4,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  tabActive: {
+    backgroundColor: colors.ink,
+  },
+  tabText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.inkMuted,
+  },
+  tabTextActive: {
+    color: colors.white,
+  },
+  dividerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  dividerLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.inkMuted,
+  },
+  dividerLabel: {
+    color: colors.inkMuted,
+    fontSize: 13,
   },
 });
