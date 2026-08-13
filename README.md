@@ -84,6 +84,48 @@ Required GitHub secrets:
 
 ---
 
+## Mobile builds (EAS)
+
+The app is one Expo/React Native codebase for web, iOS, and Android — no separate mobile code. Android builds run on Expo's cloud (EAS Build), not locally.
+
+### One-time setup
+
+```bash
+npm i -g eas-cli
+eas login
+```
+
+> If you're on WSL, install/run `eas-cli` fully inside the WSL filesystem (`npm install -g eas-cli` from within WSL, not via the Windows npm global folder mounted at `/mnt/c/...`). Running it across that mount has caused corrupted `node_modules` files (e.g. a `cli-spinners` JSON parse error) — reinstalling natively inside WSL, or using `npx eas-cli@latest`, avoids it.
+
+`eas.json` build profiles (`development`, `preview`, `production`) are already committed and each is linked to a matching EAS **environment** via the `"environment"` field. That link is required — without it, cloud builds don't pick up any env vars even if they're set in EAS.
+
+### Env vars for cloud builds
+
+Local `.env` is gitignored and never reaches EAS's build servers, so `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY` must also be registered with EAS directly (once per environment — `--environment` only accepts a single value per call):
+
+```bash
+eas env:set --name EXPO_PUBLIC_SUPABASE_URL --value "https://YOUR_PROJECT.supabase.co" --environment preview --visibility plaintext
+eas env:set --name EXPO_PUBLIC_SUPABASE_ANON_KEY --value "your-anon-key" --environment preview --visibility plaintext
+# repeat with --environment development and --environment production
+```
+
+(`eas env:create` is deprecated — use `eas env:set`. Values are safe as plaintext since the Supabase anon key is meant to be public; RLS is what protects data.)
+
+Verify with `eas env:list --environment preview`.
+
+### Build & install
+
+```bash
+eas build --platform android --profile preview   # installable .apk, no Play Store needed
+eas build --platform android --profile production # .aab, for Play Store submission
+```
+
+Builds run on Expo's servers (no local `.apk`/`.aab` appears in the repo) — download from the link EAS prints when the build finishes, or from the project's [expo.dev](https://expo.dev) dashboard. First Android build can take ~20–40 min (cold Gradle build + free-tier queue); later builds are faster.
+
+Install the downloaded `.apk` directly on an Android device (enable "install from unknown sources" if prompted), or `eas submit --platform android` to push a `production` build to the Play Store (requires a Google Play developer account).
+
+---
+
 ## App routes
 
 - `/lobby` — play, create/join room, queue
