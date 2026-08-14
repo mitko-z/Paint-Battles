@@ -36,7 +36,9 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 ### 2. Supabase
 
 1. In the Supabase dashboard → **Authentication → Providers**, enable **Anonymous** sign-ins.
-2. Run the migration in [`supabase/migrations/20260311000000_initial.sql`](supabase/migrations/20260311000000_initial.sql) (SQL editor, or `supabase db push` / `supabase migration up`).
+2. Run **every** file in [`supabase/migrations/`](supabase/migrations/), in filename order — not just the first one. Easiest via `supabase db push` / `supabase migration up`, which applies all pending migrations automatically; if pasting into the SQL editor by hand, run each file in order:
+   - [`20260311000000_initial.sql`](supabase/migrations/20260311000000_initial.sql)
+   - [`20260312000000_early_submit_wait.sql`](supabase/migrations/20260312000000_early_submit_wait.sql) — fixes a bug where one player submitting early ended the match for both, ignoring remaining time. Any Supabase project missing this migration will reproduce that bug.
 3. Deploy the judge function:
 
 ```bash
