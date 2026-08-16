@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { ErrorText, PrimaryButton, Screen } from "@/components/ui";
-import { DrawingCanvas, strokesToPngBase64 } from "@/features/canvas/DrawingCanvas";
+import { DrawingCanvas, type DrawingCanvasHandle } from "@/features/canvas/DrawingCanvas";
 import { useAuth } from "@/features/auth/AuthProvider";
 import {
   getMatch,
@@ -12,7 +12,7 @@ import {
   uploadDrawingPng,
 } from "@/features/match/api";
 import { useServerCountdown } from "@/features/match/useServerCountdown";
-import type { Match, Stroke } from "@/lib/types";
+import type { Match } from "@/lib/types";
 import { colors, fonts } from "@/lib/theme";
 
 const UUID_RE =
@@ -24,12 +24,11 @@ export default function MatchScreen() {
   const { user } = useAuth();
   const [match, setMatch] = useState<Match | null>(null);
   const [tool, setTool] = useState<"pen" | "eraser">("pen");
-  const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const submittedRef = useRef(false);
-  const canvasSize = useRef({ width: 360, height: 480 });
+  const canvasRef = useRef<DrawingCanvasHandle>(null);
 
   const countdown = useServerCountdown(match?.countdown_ends_at);
   const drawingClock = useServerCountdown(match?.drawing_ends_at);
@@ -83,11 +82,8 @@ export default function MatchScreen() {
     setSubmitting(true);
     setError(null);
     try {
-      const base64 = await strokesToPngBase64(
-        strokes,
-        canvasSize.current.width,
-        canvasSize.current.height,
-      );
+      const base64 = await canvasRef.current?.exportPngBase64();
+      if (!base64) throw new Error("Could not capture drawing");
       const path = await uploadDrawingPng(user.id, match.id, base64);
       const submission = await submitDrawing(match.id, path);
       void submission;
@@ -104,7 +100,7 @@ export default function MatchScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [match, user, strokes, refresh]);
+  }, [match, user, refresh]);
 
   // Auto-submit only after the shared timer ends (or match is in submitting).
   // Early Submit from one client must not force the other to submit.
@@ -155,18 +151,8 @@ export default function MatchScreen() {
 
       {showCanvas ? (
         <>
-          <View
-            style={styles.canvasWrap}
-            onLayout={(e) => {
-              const { width, height } = e.nativeEvent.layout;
-              canvasSize.current = { width, height };
-            }}
-          >
-            <DrawingCanvas
-              tool={tool}
-              disabled={!drawingOpen || submitting}
-              onStrokesChange={setStrokes}
-            />
+          <View style={styles.canvasWrap}>
+            <DrawingCanvas ref={canvasRef} tool={tool} disabled={!drawingOpen || submitting} />
           </View>
           <View style={styles.tools}>
             <PrimaryButton
