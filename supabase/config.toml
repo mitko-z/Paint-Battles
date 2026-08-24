@@ -16,6 +16,7 @@ port = 54323
 [auth]
 enabled = true
 site_url = "http://localhost:8081"
+enable_anonymous_sign_ins = true
 additional_redirect_urls = [
   "http://localhost:8081",
   "exp://localhost:8081",
