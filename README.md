@@ -49,6 +49,12 @@ supabase secrets set OPENAI_API_KEY=sk-...
 
 Without `OPENAI_API_KEY`, judging still completes using a deterministic heuristic so you can test the full loop locally.
 
+#### Email rate limits
+
+Without a custom SMTP provider, Supabase's built-in mailer caps you at **2 emails/hour** — you'll hit this fast just testing sign-in/sign-up back and forth. Check current limits in **Authentication → Rate Limits** in the dashboard (or `[auth.rate_limit]` in [`supabase/config.toml`](supabase/config.toml); defaults: `email_sent` 2/hour, `sign_in_sign_ups` 30/5min, `token_verifications` 30/5min, `anonymous_users` 30/hour, `token_refresh` 150/5min — all per IP except `email_sent`).
+
+For real usage, set up a custom SMTP provider (SendGrid, Resend, AWS SES, …) under **Authentication → Emails → SMTP Settings** — this lifts the 2/hour cap and is generally more deliverable than the shared mailer.
+
 #### Optional: Google / Apple sign-in
 
 The `/auth` screen's "Continue with Google/Apple" buttons only appear once you enable the matching flag in `.env` — they stay hidden otherwise so you never ship a dead button.
