@@ -63,13 +63,28 @@ export async function getSubmissions(matchId: string): Promise<MatchSubmission[]
   return (data as MatchSubmission[]) ?? [];
 }
 
-export async function submitDrawing(matchId: string, storagePath: string) {
+export type SubmitDrawingResult = {
+  submission: MatchSubmission;
+  // True only for the one submit_drawing() call that atomically observed
+  // both submissions present (see supabase/migrations/20260827090000_*.sql)
+  // — the row lock submit_drawing() already takes means at most one
+  // concurrent call can ever get true, so this is the race-free signal for
+  // "you're the one who should call judge-match", replacing the old
+  // "both clients independently notice status === judging and race each
+  // other to request it" approach.
+  shouldRequestJudging: boolean;
+};
+
+export async function submitDrawing(
+  matchId: string,
+  storagePath: string,
+): Promise<SubmitDrawingResult> {
   const { data, error } = await supabase.rpc("submit_drawing", {
     p_match_id: matchId,
     p_storage_path: storagePath,
   });
   if (error) throw error;
-  return data as MatchSubmission;
+  return data as SubmitDrawingResult;
 }
 
 function base64ToBytes(base64: string): Uint8Array {

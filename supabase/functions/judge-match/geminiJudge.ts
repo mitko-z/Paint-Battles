@@ -1,0 +1,325 @@
+// Gemini Vision judge — implements the shared VisionJudge contract
+// (src/lib/vision/types.ts) via a direct REST call to Gemini's
+// generateContent endpoint.
+//
+// This imports src/lib/vision/types.ts directly (across the
+// supabase/functions/ boundary) rather than duplicating the shapes
+// locally. That requires deploying with `supabase functions deploy
+// judge-match --use-api` — see docs/DEPLOY.md for what that flag does
+// and its caveats. Team call: no duplicate copy to maintain; if the
+// cross-import ever becomes a problem, the old duplicated-types version
+// is in git history.
+//
+// Why raw fetch() instead of the @google/genai SDK:
+//   - The existing OpenAI judge in this codebase already talks to its
+//     provider via fetch(), not an SDK. Matching that keeps the two
+//     judges symmetric and avoids introducing an npm: import (extra
+//     bundle weight, one more thing that can break in the Deno edge
+//     runtime) for what is a single stateless HTTP call.
+//   - generateContent is Google's stable, fully-documented REST
+//     endpoint. There's a newer "Interactions API" (GA'd 2026-08-13)
+//     that Google now recommends by default, but it's built around
+//     multi-turn sessions (`store=true` unless you opt out) — real
+//     capability we don't need for a one-shot "score these two
+//     images" call. generateContent has no deprecation notice as of
+//     this writing. If the team wants to revisit, this is the one
+//     module that would need to change (that's the point of the
+//     VisionJudge seam).
+//
+// Why fetch-and-inline instead of passing the Supabase Storage URL:
+//   - Unlike OpenAI's `image_url`, Gemini's generateContent does not
+//     accept an image URL. It needs either inline base64 bytes
+//     (`inline_data`, capped around 20MB per request total) or a
+//     prior Files API upload. Drawings here are small PNGs from a
+//     60s canvas, so inline is simplest and avoids a second Google
+//     API round trip.
+//
+// Model ID: IDs shift fast on this API — re-check the AI Studio model
+// picker before shipping. Currently gemini-3.5-flash (switched here
+// 2026-08-27 after 3.6-flash/3.7-flash/3.5-flash-lite each hit
+// free-tier RPM the same day during testing — see the project doc's
+// Incident 3, that RPM burn was a duplicate-request bug, not these
+// models being bad).
+//
+// Free-tier limits (as reported from the AI Studio rate-limit page for
+// this model, 2026-08-25): RPM 5, TPM 250K, RPD 20. RPD 20 in
+// particular is tight — 1 match = 1 request, so ~20 judged matches/day
+// before every subsequent match falls back to the heuristic judge below
+// (see "rate_limited" outcome). Worth checking whether that's enough
+// headroom for the "100 matches" beta target, or whether it needs to
+// span several days / a higher tier / a different model.
+import type {
+  VisionJudge,
+  VisionJudgeInput,
+  VisionJudgeResult,
+} from "../../../src/lib/vision/types.ts";
+
+const GEMINI_MODEL = "gemini-3.5-flash";
+const GEMINI_ENDPOINT =
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+// TEMPORARILY WIDENED FOR TESTING (2026-08-27, explicit ask — "let's extend
+// this timeout to a bigger value, e.g. 30 seconds - I want to test the
+// model's behavior properly"). R3.2's real target is <3s round trip, R3.3's
+// hard ceiling is 8s total — these values are well above that on purpose,
+// to see how Gemini actually behaves (slow API? consistently >3.5s?
+// something else?) instead of cutting it off before it can answer. Dial
+// back toward PER_ATTEMPT_TIMEOUT_MS ~3-4s / HARD_CEILING_MS ~8s once
+// that's understood and R3.2/R3.3 are being held for real, not just tested
+// against.
+const PER_ATTEMPT_TIMEOUT_MS = 30_000;
+// Two attempts at 30s each, plus overhead — set well above 2x
+// PER_ATTEMPT_TIMEOUT_MS so a slow-but-real response is never cut off by
+// this ceiling before PER_ATTEMPT_TIMEOUT_MS itself would time it out.
+const HARD_CEILING_MS = 65_000;
+// R3.4: one retry on error/timeout, no more (avoid compounding latency).
+// Does NOT apply to a rate-limit hit — see below.
+const MAX_ATTEMPTS = 2;
+
+export type JudgeOutcome = "scored" | "timeout" | "error_fallback" | "rate_limited" | "no_api_key";
+
+export type JudgeLogRecord = {
+  matchId: string;
+  provider: "gemini";
+  model: string;
+  outcome: JudgeOutcome;
+  attempts: number;
+  latencyMs: number;
+  error?: string;
+};
+
+class GeminiTimeoutError extends Error {}
+class GeminiRateLimitError extends Error {}
+
+/**
+ * Builds a VisionJudge backed by Gemini. `onLog` is called exactly once
+ * per score() call with a structured record — R§5 requires every match
+ * to produce a structured log so the "100 matches, no desync" beta
+ * metric is actually countable, not eyeballed.
+ *
+ * `heuristicFallback` is what we hand back when the free-tier quota is
+ * exhausted (HTTP 429). Team decision: a quota hit is not the same
+ * situation as a genuine timeout/error (R3.3's "declare a draw") — it's
+ * an expected, foreseeable state on the free tier, so it degrades to
+ * the same non-AI heuristic judge used when no API key is configured at
+ * all, rather than drawing every match until the quota resets.
+ *
+ * Debugging note: rather than a generic "AI unavailable" message, both
+ * fallback paths embed a short reason straight into the rationale text
+ * that's already persisted to `match_submissions.rationale` (existing
+ * column, no schema change) — that's what shows up in-app on the
+ * results screen. The FULL error (untruncated further than here) still
+ * goes to `onLog` for the Edge Function logs; what lands in the
+ * rationale is capped short (~140 chars) since players see it too.
+ */
+export function createGeminiJudge(
+  apiKey: string,
+  matchId: string,
+  onLog: (record: JudgeLogRecord) => void,
+  heuristicFallback: (prompt: string, reason: string) => VisionJudgeResult,
+): VisionJudge {
+  return {
+    async score(input: VisionJudgeInput): Promise<VisionJudgeResult> {
+      const started = Date.now();
+      const deadline = started + HARD_CEILING_MS;
+
+      const shortReason = (err: unknown): string => {
+        const msg = err instanceof Error ? err.message : String(err);
+        return msg.length > 140 ? `${msg.slice(0, 140)}…` : msg;
+      };
+
+      const finish = (
+        err: unknown,
+        outcome: JudgeOutcome,
+        attemptsMade: number,
+        result: VisionJudgeResult,
+      ): VisionJudgeResult => {
+        const message = err instanceof Error ? err.message : String(err);
+        onLog({
+          matchId,
+          provider: "gemini",
+          model: GEMINI_MODEL,
+          outcome,
+          attempts: attemptsMade,
+          latencyMs: Date.now() - started,
+          error: outcome === "scored" ? undefined : message,
+        });
+        return result;
+      };
+
+      const drawFallback = (err: unknown): VisionJudgeResult => {
+        const reason = shortReason(err);
+        return {
+          scoreA: 0,
+          scoreB: 0,
+          winner: "draw",
+          rationaleA: `AI judging failed (${reason}) — match declared a draw.`,
+          rationaleB: `AI judging failed (${reason}) — match declared a draw.`,
+        };
+      };
+
+      // Fetch + base64-encode both drawings once — they don't change
+      // between retries, only the model call is worth repeating.
+      let imageA: InlineImage;
+      let imageB: InlineImage;
+      try {
+        [imageA, imageB] = await Promise.all([
+          fetchAsInlineData(input.imageAUrl),
+          fetchAsInlineData(input.imageBUrl),
+        ]);
+      } catch (err) {
+        return finish(err, "error_fallback", 0, drawFallback(err));
+      }
+
+      let lastError: unknown =
+        new GeminiTimeoutError("No time left in the 8s scoring budget");
+      let attemptsMade = 0;
+
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+
+        attemptsMade = attempt;
+        try {
+          const result = await callGemini(
+            apiKey,
+            input.prompt,
+            imageA,
+            imageB,
+            Math.min(PER_ATTEMPT_TIMEOUT_MS, remaining),
+          );
+          return finish(undefined, "scored", attempt, result);
+        } catch (err) {
+          lastError = err;
+          if (err instanceof GeminiRateLimitError) break; // retrying now won't help — same RPM window
+        }
+      }
+
+      if (lastError instanceof GeminiRateLimitError) {
+        return finish(
+          lastError,
+          "rate_limited",
+          attemptsMade,
+          heuristicFallback(input.prompt, shortReason(lastError)),
+        );
+      }
+
+      const outcome: JudgeOutcome = lastError instanceof GeminiTimeoutError
+        ? "timeout"
+        : "error_fallback";
+      return finish(lastError, outcome, attemptsMade, drawFallback(lastError));
+    },
+  };
+}
+
+type InlineImage = { base64: string; mimeType: string };
+
+async function callGemini(
+  apiKey: string,
+  prompt: string,
+  imageA: InlineImage,
+  imageB: InlineImage,
+  timeoutMs: number,
+): Promise<VisionJudgeResult> {
+  const system =
+    `You are a fair judge for a 1-minute doodle contest.
+Score how well each sketch depicts the prompt subject — NOT artistic skill.
+Return ONLY compact JSON, no markdown fences:
+{"scoreA":0-100,"scoreB":0-100,"winner":"A"|"B"|"draw","rationaleA":"short","rationaleB":"short"}`;
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: `${system}\n\nPrompt to draw: "${prompt}". Image A then Image B.` },
+              { inline_data: { mime_type: imageA.mimeType, data: imageA.base64 } },
+              { inline_data: { mime_type: imageB.mimeType, data: imageB.base64 } },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.2,
+        },
+      }),
+    });
+  } catch (err) {
+    if (timedOut) throw new GeminiTimeoutError(`Gemini call exceeded ${timeoutMs}ms`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (res.status === 429) {
+    const text = await res.text();
+    throw new GeminiRateLimitError(`Gemini rate limit: ${text.slice(0, 300)}`);
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Gemini error: ${res.status} ${text.slice(0, 500)}`);
+  }
+
+  const data = await res.json();
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!content) {
+    // Most common causes: the prompt or an image tripped Gemini's safety
+    // filters (promptFeedback.blockReason), or the candidate stopped for
+    // a reason other than completing normally (finishReason). Surface
+    // whichever is present instead of a bare "empty response".
+    const blockReason = data?.promptFeedback?.blockReason;
+    const finishReason = data?.candidates?.[0]?.finishReason;
+    throw new Error(
+      `Empty Gemini response (blockReason=${blockReason ?? "none"}, finishReason=${finishReason ?? "none"})`,
+    );
+  }
+
+  let parsed: VisionJudgeResult;
+  try {
+    parsed = JSON.parse(content) as VisionJudgeResult;
+  } catch {
+    throw new Error(`Gemini response wasn't valid JSON: ${content.slice(0, 200)}`);
+  }
+  parsed.scoreA = clampScore(parsed.scoreA);
+  parsed.scoreB = clampScore(parsed.scoreB);
+  if (!["A", "B", "draw"].includes(parsed.winner)) {
+    parsed.winner = parsed.scoreA === parsed.scoreB ? "draw" : parsed.scoreA > parsed.scoreB ? "A" : "B";
+  }
+  return parsed;
+}
+
+async function fetchAsInlineData(url: string): Promise<InlineImage> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch drawing (${res.status}) from ${url}`);
+  const mimeType = res.headers.get("content-type") ?? "image/png";
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  return { base64: bytesToBase64(bytes), mimeType };
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000; // avoid blowing the call stack on String.fromCharCode(...bigArray)
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function clampScore(n: number): number {
+  if (typeof n !== "number" || Number.isNaN(n)) return 0;
+  return Math.max(0, Math.min(100, Math.round(n * 100) / 100));
+}

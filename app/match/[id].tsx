@@ -28,6 +28,14 @@ export default function MatchScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const submittedRef = useRef(false);
+  // Guards against calling requestJudgment more than once per mount of this
+  // screen (2026-08-27 fix — see judge-match/index.ts's server-side claim
+  // comment for the full incident). This ref alone can't stop a *different*
+  // mount — a page reload, or app/results/[id].tsx's own mount effect —
+  // from also calling requestJudgment for the same match; that cross-mount
+  // case is what the server-side claim in judge-match/index.ts actually
+  // fixes. This just stops the wasteful, redundant calls from *this* one.
+  const judgeRequestedRef = useRef(false);
   const canvasRef = useRef<DrawingCanvasHandle>(null);
 
   const countdown = useServerCountdown(match?.countdown_ends_at);
@@ -85,14 +93,22 @@ export default function MatchScreen() {
       const base64 = await canvasRef.current?.exportPngBase64();
       if (!base64) throw new Error("Could not capture drawing");
       const path = await uploadDrawingPng(user.id, match.id, base64);
-      const submission = await submitDrawing(match.id, path);
-      void submission;
+      // shouldRequestJudging comes from submit_drawing()'s own atomic claim
+      // (2026-08-27 — see supabase/migrations/20260827090000_*.sql): the
+      // row lock it already takes means at most one of the two players'
+      // submit_drawing() calls can ever get true, so at most one client
+      // ever calls requestJudgment for a given match. No client-side
+      // "who saw status === judging first" race to get wrong anymore.
+      const { shouldRequestJudging } = await submitDrawing(match.id, path);
       await refresh();
-      const latest = await getMatch(match.id);
-      if (latest?.status === "judging") {
+      if (shouldRequestJudging && !judgeRequestedRef.current) {
+        judgeRequestedRef.current = true;
         await requestJudgment(match.id);
         router.replace(`/results/${match.id}`);
       }
+      // If shouldRequestJudging is false, this client is the one who
+      // submitted first — it just waits. The poll/realtime effect above
+      // already routes to /results as soon as status flips there.
     } catch (e) {
       submittedRef.current = false;
       setHasSubmitted(false);
@@ -104,17 +120,25 @@ export default function MatchScreen() {
 
   // Auto-submit only after the shared timer ends (or match is in submitting).
   // Early Submit from one client must not force the other to submit.
+  //
+  // requestJudgment is deliberately NOT called from here anymore
+  // (2026-08-27 — see Incident 5 in the project doc / the submit_drawing
+  // migration comment). This effect used to also call requestJudgment
+  // whenever match.status === "judging", but "does this client currently
+  // observe status === judging" isn't an atomic signal — both players'
+  // clients can observe it at effectively the same moment, so both could
+  // call requestJudgment for the same match. That's now decided once,
+  // atomically, inside submit_drawing() itself (via its existing row lock)
+  // and surfaced to doSubmit() below as shouldRequestJudging — only that
+  // one path ever calls requestJudgment. This effect now only handles
+  // auto-submit; waiting for the result happens via the poll/realtime
+  // effect above, which already routes to /results once status gets there.
   useEffect(() => {
     if (!match) return;
     if (match.status === "submitting" || (match.status === "drawing" && drawingClock.isDone)) {
       void doSubmit();
     }
-    if (match.status === "judging") {
-      void requestJudgment(match.id)
-        .then(() => router.replace(`/results/${match.id}`))
-        .catch((e) => setError(e instanceof Error ? e.message : "Judging failed"));
-    }
-  }, [match?.status, drawingClock.isDone, doSubmit, match]);
+  }, [match?.status, drawingClock.isDone, doSubmit]);
 
   if (!match) {
     return (

@@ -8,7 +8,7 @@ import { createRoom, getMyActiveMatch, joinRoom } from "@/features/match/api";
 import { colors, fonts } from "@/lib/theme";
 
 export default function LobbyScreen() {
-  const { configured, loading, ensureGuestSession, profile, user } = useAuth();
+  const { configured, configWarning, loading, ensureGuestSession, profile, user } = useAuth();
   const [busy, setBusy] = useState(false);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +71,12 @@ export default function LobbyScreen() {
             {profile.wins}W · {profile.losses}L
           </Text>
         ) : null}
+
+        {/* configWarning is a config-mismatch diagnosis (see src/lib/supabase.ts),
+            not a reason to hide the actions below — the buttons stay live and
+            tappable either way; every tap will just keep failing with the
+            same reason until .env is fixed and Expo is restarted. */}
+        {configWarning ? <Text style={styles.warn}>{configWarning}</Text> : null}
 
         <View style={styles.actions}>
           <PrimaryButton
@@ -174,5 +180,6 @@ const styles = StyleSheet.create({
     color: colors.danger,
     fontSize: 15,
     lineHeight: 22,
+    marginBottom: 16,
   },
 });
