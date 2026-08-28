@@ -14,6 +14,28 @@ export default function RoomScreen() {
 
   useEffect(() => {
     if (!params.id) return;
+    let cancelled = false;
+
+    const gotMatch = (matchId: string) => {
+      if (cancelled) return;
+      cancelled = true;
+      router.replace(`/match/${matchId}`);
+    };
+
+    const checkForMatch = async () => {
+      try {
+        const { data } = await supabase
+          .from("matches")
+          .select("id")
+          .eq("room_id", params.id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (data?.id) gotMatch(data.id);
+      } catch {
+        // ignore transient errors; next poll tick will retry
+      }
+    };
 
     void supabase
       .from("rooms")
@@ -27,18 +49,7 @@ export default function RoomScreen() {
 
     const unsubRoom = subscribeToRoom(params.id, (next) => {
       setRoom(next);
-      if (next.status === "matched") {
-        void supabase
-          .from("matches")
-          .select("id")
-          .eq("room_id", next.id)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-          .then(({ data }) => {
-            if (data?.id) router.replace(`/match/${data.id}`);
-          });
-      }
+      if (next.status === "matched") void checkForMatch();
     });
 
     const channel = supabase
@@ -53,14 +64,21 @@ export default function RoomScreen() {
         },
         (payload) => {
           const match = payload.new as { id: string };
-          router.replace(`/match/${match.id}`);
+          gotMatch(match.id);
         },
       )
       .subscribe();
 
+    // Same rationale as queue.tsx: realtime channel setup latency varies
+    // a lot between web and mobile, so a missed INSERT event shouldn't be
+    // able to strand a player in this room forever.
+    const poll = setInterval(() => void checkForMatch(), 2000);
+
     return () => {
+      cancelled = true;
       unsubRoom();
       void supabase.removeChannel(channel);
+      clearInterval(poll);
     };
   }, [params.id]);
 

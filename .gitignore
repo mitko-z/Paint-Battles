@@ -34,6 +34,9 @@ yarn-error.*
 .env
 .env*.local
 
+# stray Supabase CLI binary (accidentally downloaded/extracted into repo root)
+/supabase-go
+
 # typescript
 *.tsbuildinfo
 

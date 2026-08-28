@@ -95,7 +95,16 @@ function ResultCard({
     <View style={styles.card}>
       <Text style={styles.cardLabel}>{label}</Text>
       <Text style={styles.score}>{score != null ? Math.round(score) : "—"}</Text>
-      {uri ? <Image source={{ uri }} style={styles.thumb} resizeMode="contain" /> : null}
+      {uri ? (
+        <Image
+          source={{ uri }}
+          style={styles.thumb}
+          resizeMode="contain"
+          onError={(e) =>
+            console.warn(`[results] failed to load ${label} image:`, e.nativeEvent.error, uri)
+          }
+        />
+      ) : null}
       {rationale ? <Text style={styles.rationale}>{rationale}</Text> : null}
     </View>
   );
