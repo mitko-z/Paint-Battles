@@ -36,7 +36,9 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 ### 2. Supabase
 
 1. In the Supabase dashboard → **Authentication → Providers**, enable **Anonymous** sign-ins.
-2. Run the migration in [`supabase/migrations/20260311000000_initial.sql`](supabase/migrations/20260311000000_initial.sql) (SQL editor, or `supabase db push` / `supabase migration up`).
+2. Run **every** file in [`supabase/migrations/`](supabase/migrations/), in filename order — not just the first one. Easiest via `supabase db push` / `supabase migration up`, which applies all pending migrations automatically; if pasting into the SQL editor by hand, run each file in order:
+   - [`20260311000000_initial.sql`](supabase/migrations/20260311000000_initial.sql)
+   - [`20260312000000_early_submit_wait.sql`](supabase/migrations/20260312000000_early_submit_wait.sql) — fixes a bug where one player submitting early ended the match for both, ignoring remaining time. Any Supabase project missing this migration will reproduce that bug.
 3. Deploy the judge function:
 
 ```bash
@@ -81,6 +83,48 @@ Required GitHub secrets:
 - `AZURE_STATIC_WEB_APPS_API_TOKEN`
 - `EXPO_PUBLIC_SUPABASE_URL`
 - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
+
+---
+
+## Mobile builds (EAS)
+
+The app is one Expo/React Native codebase for web, iOS, and Android — no separate mobile code. Android builds run on Expo's cloud (EAS Build), not locally.
+
+### One-time setup
+
+```bash
+npm i -g eas-cli
+eas login
+```
+
+> If you're on WSL, install/run `eas-cli` fully inside the WSL filesystem (`npm install -g eas-cli` from within WSL, not via the Windows npm global folder mounted at `/mnt/c/...`). Running it across that mount has caused corrupted `node_modules` files (e.g. a `cli-spinners` JSON parse error) — reinstalling natively inside WSL, or using `npx eas-cli@latest`, avoids it.
+
+`eas.json` build profiles (`development`, `preview`, `production`) are already committed and each is linked to a matching EAS **environment** via the `"environment"` field. That link is required — without it, cloud builds don't pick up any env vars even if they're set in EAS.
+
+### Env vars for cloud builds
+
+Local `.env` is gitignored and never reaches EAS's build servers, so `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY` must also be registered with EAS directly (once per environment — `--environment` only accepts a single value per call):
+
+```bash
+eas env:set --name EXPO_PUBLIC_SUPABASE_URL --value "https://YOUR_PROJECT.supabase.co" --environment preview --visibility plaintext
+eas env:set --name EXPO_PUBLIC_SUPABASE_ANON_KEY --value "your-anon-key" --environment preview --visibility plaintext
+# repeat with --environment development and --environment production
+```
+
+(`eas env:create` is deprecated — use `eas env:set`. Values are safe as plaintext since the Supabase anon key is meant to be public; RLS is what protects data.)
+
+Verify with `eas env:list --environment preview`.
+
+### Build & install
+
+```bash
+eas build --platform android --profile preview   # installable .apk, no Play Store needed
+eas build --platform android --profile production # .aab, for Play Store submission
+```
+
+Builds run on Expo's servers (no local `.apk`/`.aab` appears in the repo) — download from the link EAS prints when the build finishes, or from the project's [expo.dev](https://expo.dev) dashboard. First Android build can take ~20–40 min (cold Gradle build + free-tier queue); later builds are faster.
+
+Install the downloaded `.apk` directly on an Android device (enable "install from unknown sources" if prompted), or `eas submit --platform android` to push a `production` build to the Play Store (requires a Google Play developer account).
 
 ---
 
