@@ -37,6 +37,9 @@ yarn-error.*
 # stray Supabase CLI binary (accidentally downloaded/extracted into repo root)
 /supabase-go
 
+# Supabase CLI local cache
+supabase/.temp/
+
 # typescript
 *.tsbuildinfo
 

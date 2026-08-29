@@ -8,9 +8,8 @@ import type { Match } from "@/lib/types";
 import { colors, fonts } from "@/lib/theme";
 
 export default function ProfileScreen() {
-  const { profile, refreshProfile, signInWithEmail, upgradeProfile, signOut } = useAuth();
+  const { session, profile, refreshProfile, upgradeProfile, signOut } = useAuth();
   const [matches, setMatches] = useState<Match[]>([]);
-  const [email, setEmail] = useState("");
   const [name, setName] = useState(profile?.display_name ?? "");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -54,26 +53,15 @@ export default function ProfileScreen() {
         }}
       />
 
-      <Text style={styles.section}>Email magic link</Text>
-      <TextInput
-        style={styles.input}
-        value={email}
-        onChangeText={setEmail}
-        autoCapitalize="none"
-        keyboardType="email-address"
-        placeholder="you@example.com"
-        placeholderTextColor={colors.inkMuted}
-      />
-      <PrimaryButton
-        label="Send sign-in link"
-        onPress={async () => {
-          setError(null);
-          setMessage(null);
-          const res = await signInWithEmail(email);
-          if (res.error) setError(res.error);
-          else setMessage("Check your email for the magic link.");
-        }}
-      />
+      <Text style={styles.section}>Account</Text>
+      {profile?.is_guest ? (
+        <PrimaryButton
+          label="Sign in / create account"
+          onPress={() => router.push("/auth")}
+        />
+      ) : (
+        <Text style={styles.sub}>Signed in as {session?.user.email ?? "your account"}</Text>
+      )}
 
       <Text style={styles.section}>Recent matches</Text>
       <FlatList

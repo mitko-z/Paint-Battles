@@ -8,8 +8,17 @@ import {
   type ReactNode,
 } from "react";
 import type { Session, User } from "@supabase/supabase-js";
-import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import * as Linking from "expo-linking";
+import * as WebBrowser from "expo-web-browser";
+// QueryParams parses both `?code=` and `#access_token=` style auth callback URLs.
+import * as QueryParams from "expo-auth-session/build/QueryParams";
+import { getAuthRedirectUrl, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import type { Profile } from "@/lib/types";
+
+// Required once so a web OAuth popup closes itself after redirecting back.
+WebBrowser.maybeCompleteAuthSession();
+
+export type OAuthProvider = "google" | "apple";
 
 type AuthContextValue = {
   session: Session | null;
@@ -19,7 +28,9 @@ type AuthContextValue = {
   configured: boolean;
   ensureGuestSession: () => Promise<void>;
   refreshProfile: () => Promise<void>;
-  signInWithEmail: (email: string) => Promise<{ error?: string }>;
+  createAccount: (email: string, displayName?: string) => Promise<{ error?: string }>;
+  signIn: (email: string) => Promise<{ error?: string }>;
+  signInWithOAuth: (provider: OAuthProvider) => Promise<{ error?: string }>;
   upgradeProfile: (displayName: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
 };
@@ -77,16 +88,104 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   }, []);
 
-  const signInWithEmail = useCallback(async (email: string) => {
+  // Parses a Supabase auth callback URL (magic link or OAuth redirect) and, if it
+  // carries a token pair, establishes the session from it. Returns an error message
+  // on failure, or undefined if the URL wasn't an auth callback / it succeeded.
+  const createSessionFromUrl = useCallback(async (url: string) => {
+    const { params, errorCode } = QueryParams.getQueryParams(url);
+    if (errorCode) return errorCode;
+    const { access_token, refresh_token } = params;
+    if (!access_token || !refresh_token) return undefined;
+    const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+    return error?.message;
+  }, []);
+
+  // Native has no browser URL bar to auto-detect a session from, so we listen for the
+  // app being opened via the `drawingbattle://` deep link a magic-link email or OAuth
+  // redirect lands on.
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    void Linking.getInitialURL().then((url) => {
+      if (url) void createSessionFromUrl(url);
+    });
+
+    const sub = Linking.addEventListener("url", ({ url }) => {
+      void createSessionFromUrl(url);
+    });
+    return () => sub.remove();
+  }, [createSessionFromUrl]);
+
+  // The `upgrade_profile` RPC (below) is what flips a profile from guest to
+  // permanent, but it only runs when we call it — there's no DB trigger for it
+  // since it applies to an *existing* row (the insert trigger only covers new
+  // users). Once a guest's session stops being anonymous (they confirmed a
+  // magic-link or OAuth sign-in), finalize the profile automatically so no
+  // extra manual step is needed after clicking the email link.
+  useEffect(() => {
+    if (!session?.user || session.user.is_anonymous !== false) return;
+    if (!profile?.is_guest) return;
+    const metaName = (session.user.user_metadata as { display_name?: string } | undefined)
+      ?.display_name;
+    void upgradeProfile(metaName ?? profile.display_name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, profile]);
+
+  const createAccount = useCallback(async (email: string, displayName?: string) => {
+    const trimmedEmail = email.trim();
+    const name = displayName?.trim() || undefined;
+    const emailRedirectTo = getAuthRedirectUrl();
+
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.user.is_anonymous) {
+      // Upgrade the current guest in place: same user id, same match history.
+      const { error } = await supabase.auth.updateUser(
+        { email: trimmedEmail, data: name ? { display_name: name } : undefined },
+        { emailRedirectTo },
+      );
+      return { error: error?.message };
+    }
+
     const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
+      email: trimmedEmail,
       options: {
         shouldCreateUser: true,
-        data: { is_guest: false },
+        emailRedirectTo,
+        data: { display_name: name, is_guest: false },
       },
     });
     return { error: error?.message };
   }, []);
+
+  const signIn = useCallback(async (email: string) => {
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: { shouldCreateUser: false, emailRedirectTo: getAuthRedirectUrl() },
+    });
+    return { error: error?.message };
+  }, []);
+
+  const signInWithOAuth = useCallback(async (provider: OAuthProvider) => {
+    const redirectTo = getAuthRedirectUrl();
+    const { data: sessionData } = await supabase.auth.getSession();
+    const isAnonymous = Boolean(sessionData.session?.user.is_anonymous);
+
+    // Linking attaches the OAuth identity to the current guest user instead of
+    // creating a disconnected second account.
+    const { data, error } = isAnonymous
+      ? await supabase.auth.linkIdentity({ provider, options: { redirectTo, skipBrowserRedirect: true } })
+      : await supabase.auth.signInWithOAuth({ provider, options: { redirectTo, skipBrowserRedirect: true } });
+
+    if (error) return { error: error.message };
+    if (!data?.url) return { error: "Could not start sign-in." };
+
+    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+    if (result.type === "success" && result.url) {
+      const sessionError = await createSessionFromUrl(result.url);
+      if (sessionError) return { error: sessionError };
+    }
+    return {};
+  }, [createSessionFromUrl]);
 
   const upgradeProfile = useCallback(
     async (displayName: string) => {
@@ -114,7 +213,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       configured: isSupabaseConfigured,
       ensureGuestSession,
       refreshProfile,
-      signInWithEmail,
+      createAccount,
+      signIn,
+      signInWithOAuth,
       upgradeProfile,
       signOut,
     }),
@@ -124,7 +225,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       ensureGuestSession,
       refreshProfile,
-      signInWithEmail,
+      createAccount,
+      signIn,
+      signInWithOAuth,
       upgradeProfile,
       signOut,
     ],
