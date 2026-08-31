@@ -83,8 +83,9 @@ Deploys are **tag-triggered, not branch-triggered**: pushing a `vX.Y.Z` tag is w
 We moved off Azure Static Web Apps (2026-08-31) — the account it was created under belonged to a teammate who's since left, and the corporate Azure account replacing it turned out to be read-only (no permission to create resources). GitHub Pages needs **no external account at all** since the repo is public, which sidesteps that problem entirely.
 
 **One-time setup (human, ~2 minutes, no CLI):**
-1. Repo → **Settings → Pages → Build and deployment → Source** → set to **"GitHub Actions"** (not "Deploy from a branch"). That's the only manual step — no tokens, no external signup.
-2. Confirm `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY` are already set as repo secrets (Settings → Secrets and variables → Actions) — carried over from the original setup, GitHub Pages doesn't need any secret of its own.
+1. Repo → **Settings → Pages → Build and deployment → Source** → set to **"GitHub Actions"** (not "Deploy from a branch").
+2. Repo → **Settings → Environments → `github-pages`** (auto-created by step 1) → **Deployment branches and tags**. By default this only allows the default branch (`main`) — since we deploy from tags, not branches, add a **Tag** rule with pattern `v*` (or set it to "No restriction"; the workflow's own `check` job already gates on highest-semver-tag, so this is belt-and-suspenders either way). **Skipping this step is the single most likely first-deploy failure** — it fails late, after the build succeeds, with `Tag "vX.Y.Z" is not allowed to deploy to github-pages due to environment protection rules.`
+3. Confirm `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY` are already set as repo secrets (Settings → Secrets and variables → Actions) — carried over from the original setup, GitHub Pages doesn't need any secret of its own.
 
 **Ship a version:** `git tag v1.0.0 && git push origin v1.0.0` (bump the number each release; tag whatever commit is on `main` when you cut a release). Or re-run manually from the Actions tab (`workflow_dispatch`) to redeploy the current highest tag without cutting a new one.
 
