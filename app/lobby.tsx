@@ -2,16 +2,33 @@ import { useEffect, useState } from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { BrandTitle, ErrorText, PrimaryButton, Screen } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { createRoom, getMyActiveMatch, joinRoom, startSoloMatch } from "@/features/match/api";
 import { colors, fonts } from "@/lib/theme";
+
+const waitingVideo = require("../assets/waiting.mp4");
 
 export default function LobbyScreen() {
   const { configured, configWarning, loading, ensureGuestSession, profile, user } = useAuth();
   const [busy, setBusy] = useState(false);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  // Always muted and looping - this is ambient background motion, not a video the
+  // player is meant to interact with, so there's no autoplay-policy issue here.
+  const backgroundVideo = useVideoPlayer(waitingVideo, (p) => {
+    p.loop = true;
+    p.muted = true;
+  });
+
+  useEffect(() => {
+    // play() has to be called after the VideoView has actually mounted - calling it
+    // inside the useVideoPlayer setup callback above fires before that, so on web it
+    // silently does nothing (the video just sits on its first frame).
+    backgroundVideo.play();
+  }, [backgroundVideo]);
 
   useEffect(() => {
     if (!configured || loading) return;
@@ -61,6 +78,15 @@ export default function LobbyScreen() {
         end={{ x: 0.9, y: 1 }}
         style={StyleSheet.absoluteFill}
       />
+      <VideoView
+        player={backgroundVideo}
+        style={styles.backgroundVideo}
+        contentFit="cover"
+        nativeControls={false}
+        pointerEvents="none"
+      />
+      {/* Light scrim so the ink-colored text/buttons stay legible over moving footage. */}
+      <View style={styles.videoScrim} />
       <Screen style={{ backgroundColor: "transparent" }}>
         <BrandTitle />
         <Text style={styles.hello}>
@@ -154,6 +180,23 @@ export default function LobbyScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  backgroundVideo: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: "100%",
+    height: "100%",
+  },
+  videoScrim: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(247, 241, 227, 0.55)",
+  },
   hello: {
     fontFamily: fonts.display,
     fontSize: 22,
