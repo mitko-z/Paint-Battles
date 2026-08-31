@@ -16,6 +16,14 @@ import {
 import { useServerCountdown } from "@/features/match/useServerCountdown";
 import type { Match } from "@/lib/types";
 import { colors, fonts } from "@/lib/theme";
+import { useAudioPlayer } from "expo-audio";
+
+// Cue sounds for the match timer. useAudioPlayer() starts loading its source as soon as
+// it is called, so mounting these hooks up front (even before they are needed) is what
+// preloads them - by the time the countdown phase starts, playback is instant.
+const threeTwoOneAudio = require("../../assets/3-2-1.mp3");
+const whistleAudio = require("../../assets/whistle.wav");
+const clockTickAudio = require("../../assets/clock-tick.mp3");
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -46,6 +54,16 @@ export default function MatchScreen() {
   // effect further down.
   const matchRef = useRef<Match | null>(null);
   const foregroundedRef = useRef(true);
+
+  // Preloaded up front (see the requires above); played on cue by the effects below.
+  const threeTwoOnePlayer = useAudioPlayer(threeTwoOneAudio);
+  const whistlePlayer = useAudioPlayer(whistleAudio);
+  // Not wired to playback yet (that is the "10 seconds left" step) - kept here so it
+  // preloads alongside the other two cues, per the "preload the cue sounds" requirement.
+  const clockTickPlayer = useAudioPlayer(clockTickAudio);
+  // Guards the 3-2-1 cue so it fires exactly once per match, the moment the countdown
+  // phase is first observed - not on every re-render while status stays "countdown".
+  const countdownCueFiredRef = useRef(false);
 
   const countdown = useServerCountdown(match?.countdown_ends_at);
   const drawingClock = useServerCountdown(match?.drawing_ends_at);
@@ -165,6 +183,34 @@ export default function MatchScreen() {
       void refresh();
     }
   }, [match, countdown.isDone, drawingClock.isDone, refresh]);
+
+  // "3-2-1, prepare!" cue: fires once, the moment the match enters its 3-second
+  // countdown phase. There is no video for this yet (audio-only for now, by design).
+  useEffect(() => {
+    if (!match) return;
+    if (match.status === "countdown" && !countdownCueFiredRef.current) {
+      countdownCueFiredRef.current = true;
+      threeTwoOnePlayer.seekTo(0);
+      threeTwoOnePlayer.play();
+    }
+    // Reset the guard once we leave countdown, so a rematch/new match on this same
+    // screen instance can play the cue again.
+    if (match.status !== "countdown") {
+      countdownCueFiredRef.current = false;
+    }
+  }, [match, threeTwoOnePlayer]);
+
+  // Whistle plays right after the 3-2-1 cue finishes, not on a fixed delay - this way
+  // it stays in sync even if the 3-2-1 clip's own length ever changes.
+  useEffect(() => {
+    const sub = threeTwoOnePlayer.addListener("playbackStatusUpdate", (status) => {
+      if (status.didJustFinish) {
+        whistlePlayer.seekTo(0);
+        whistlePlayer.play();
+      }
+    });
+    return () => sub.remove();
+  }, [threeTwoOnePlayer, whistlePlayer]);
 
   const doSubmit = useCallback(async () => {
     if (!match || !user || submittedRef.current) return;
