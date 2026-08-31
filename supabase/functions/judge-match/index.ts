@@ -1,13 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-
-type JudgePayload = {
-  scoreA: number;
-  scoreB: number;
-  winner: "A" | "B" | "draw";
-  rationaleA?: string;
-  rationaleB?: string;
-};
+import { createGeminiJudge, type JudgeLogRecord } from "./geminiJudge.ts";
+import type { VisionJudgeResult } from "../../../src/lib/vision/types.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -19,8 +13,6 @@ Deno.serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
-  const started = Date.now();
-
   try {
     const { matchId } = await req.json();
     if (!matchId) {
@@ -29,7 +21,8 @@ Deno.serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const openaiKey = Deno.env.get("OPENAI_API_KEY");
+    // Server-side only. Never expose this via EXPO_PUBLIC_* — see docs/DEPLOY.md.
+    const geminiKey = Deno.env.get("GEMINI_API_KEY");
 
     const admin = createClient(supabaseUrl, serviceKey);
 
@@ -77,7 +70,38 @@ Deno.serve(async (req) => {
       return json({ error: "Both submissions required" }, 409);
     }
 
+    // NOTE (2026-08-27): a same-day attempt at an atomic "claim" here (CAS
+    // on status: 'submitting' -> 'judging') was WRONG and got reverted —
+    // submit_drawing() (supabase/migrations/20260312000000_early_submit_wait.sql)
+    // already flips matches.status straight to 'judging' itself, server-side,
+    // the moment both submissions land, *before* this function is ever
+    // called. So by the time we get here, status is always already
+    // "judging", never "submitting" — a CAS on "submitting" can never
+    // succeed, which made every real call fall through to "wait for a
+    // result that will never come" and permanently froze every match on
+    // "Scoring both sketches…". Reverted to the simple unconditional update
+    // below. Duplicate concurrent calls for the same match (the actual
+    // quota-burning bug from the incident this comment used to describe)
+    // are now handled client-side instead — see the judgeRequestedRef guard
+    // and the dependency-array fix in app/match/[id].tsx. That doesn't
+    // close the rare case of two players' browsers both racing to call this
+    // at the same instant, but the cost of that is one wasted duplicate
+    // Gemini call, not a stuck match — a real server-side claim would need
+    // a piece of state this function can check that ISN'T already flipped
+    // by the RPC before we get here (e.g. a small dedicated lock table),
+    // which is a schema change worth doing deliberately, not as a quick
+    // patch — flag if that rare race turns out to matter in practice.
     await admin.from("matches").update({ status: "judging" }).eq("id", matchId);
+
+    // R3.1: "scoring latency" clock starts here — this is the earliest
+    // point the server can confirm both drawings are actually in. (It
+    // doesn't capture matchmaking/auth overhead above, which is
+    // deliberate: those aren't Vision-scoring latency. It also doesn't
+    // capture realtime propagation back to both clients after we
+    // return — that's a separate client-side measurement if the team
+    // wants the full submit→both-clients-see-result number from R3.1's
+    // definition.)
+    const started = Date.now();
 
     const subA = submissions.find((s) => s.user_id === match.player_a)!;
     const subB = submissions.find((s) => s.user_id === match.player_b)!;
@@ -85,9 +109,38 @@ Deno.serve(async (req) => {
     const urlA = admin.storage.from("drawings").getPublicUrl(subA.storage_path).data.publicUrl;
     const urlB = admin.storage.from("drawings").getPublicUrl(subB.storage_path).data.publicUrl;
 
-    const judgment = openaiKey
-      ? await judgeWithOpenAI(openaiKey, match.prompt, urlA, urlB)
-      : heuristicJudge(match.prompt);
+    // Structured per-match log line (R§5 instrumentation) — deliberately
+    // NOT a DB column: the team decided the 100-match beta metric can be
+    // counted manually / from these Edge Function logs rather than take
+    // on a schema change for it. Filter Edge Function logs for
+    // `"event":"judge_result"` to see outcome/attempts/latency per match.
+    const logJudgment = (record: JudgeLogRecord) => {
+      console.log(JSON.stringify({ event: "judge_result", ...record }));
+    };
+
+    let judgment: VisionJudgeResult;
+    if (geminiKey) {
+      judgment = await createGeminiJudge(geminiKey, matchId, logJudgment, heuristicJudge).score({
+        prompt: match.prompt,
+        imageAUrl: urlA,
+        imageBUrl: urlB,
+      });
+    } else {
+      // This branch never touches geminiJudge.ts, so log it here — otherwise
+      // "AI judging unavailable" would show up with nothing in the Edge
+      // Function logs explaining why (this was a real gap: first-time
+      // testing with no GEMINI_API_KEY secret set produced no log at all).
+      logJudgment({
+        matchId,
+        provider: "gemini",
+        model: "n/a",
+        outcome: "no_api_key",
+        attempts: 0,
+        latencyMs: 0,
+        error: "GEMINI_API_KEY is not set — check `supabase secrets list`",
+      });
+      judgment = heuristicJudge(match.prompt, "GEMINI_API_KEY not set");
+    }
 
     const winnerId =
       judgment.winner === "A"
@@ -165,76 +218,17 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function heuristicJudge(prompt: string): JudgePayload {
-  // Offline / missing API key: deterministic placeholder for local demos
+function heuristicJudge(prompt: string, reason = "no GEMINI_API_KEY configured"): VisionJudgeResult {
+  // Offline / no real AI judging available: deterministic placeholder.
+  // `reason` is embedded directly in the rationale (persisted to the
+  // existing match_submissions.rationale column, no schema change) so
+  // it's visible in-app on the results screen — see app/results/[id].tsx.
   const seed = prompt.length % 2;
   return {
     scoreA: seed === 0 ? 72 : 68,
     scoreB: seed === 0 ? 65 : 74,
     winner: seed === 0 ? "A" : "B",
-    rationaleA: "Heuristic score (set OPENAI_API_KEY for real judging).",
-    rationaleB: "Heuristic score (set OPENAI_API_KEY for real judging).",
+    rationaleA: `AI judging unavailable (${reason}) — used backup scorer.`,
+    rationaleB: `AI judging unavailable (${reason}) — used backup scorer.`,
   };
-}
-
-async function judgeWithOpenAI(
-  apiKey: string,
-  prompt: string,
-  imageAUrl: string,
-  imageBUrl: string,
-): Promise<JudgePayload> {
-  const system = `You are a fair judge for a 1-minute doodle contest.
-Score how well each sketch depicts the prompt subject — NOT artistic skill.
-Return ONLY compact JSON:
-{"scoreA":0-100,"scoreB":0-100,"winner":"A"|"B"|"draw","rationaleA":"short","rationaleB":"short"}`;
-
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "gpt-4o",
-      temperature: 0.2,
-      max_tokens: 300,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: `Prompt to draw: "${prompt}". Image A then Image B.` },
-            { type: "image_url", image_url: { url: imageAUrl, detail: "low" } },
-            { type: "image_url", image_url: { url: imageBUrl, detail: "low" } },
-          ],
-        },
-      ],
-    }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`OpenAI error: ${res.status} ${text}`);
-  }
-
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("Empty OpenAI response");
-  }
-
-  const parsed = JSON.parse(content) as JudgePayload;
-  parsed.scoreA = clampScore(parsed.scoreA);
-  parsed.scoreB = clampScore(parsed.scoreB);
-  if (!["A", "B", "draw"].includes(parsed.winner)) {
-    parsed.winner =
-      parsed.scoreA === parsed.scoreB ? "draw" : parsed.scoreA > parsed.scoreB ? "A" : "B";
-  }
-  return parsed;
-}
-
-function clampScore(n: number) {
-  if (typeof n !== "number" || Number.isNaN(n)) return 0;
-  return Math.max(0, Math.min(100, Math.round(n * 100) / 100));
 }

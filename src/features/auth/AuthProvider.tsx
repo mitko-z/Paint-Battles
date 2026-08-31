@@ -12,7 +12,7 @@ import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 // QueryParams parses both `?code=` and `#access_token=` style auth callback URLs.
 import * as QueryParams from "expo-auth-session/build/QueryParams";
-import { getAuthRedirectUrl, isSupabaseConfigured, supabase } from "@/lib/supabase";
+import { getAuthRedirectUrl, isSupabaseConfigured, supabase, supabaseConfigWarning } from "@/lib/supabase";
 import type { Profile } from "@/lib/types";
 
 // Required once so a web OAuth popup closes itself after redirecting back.
@@ -26,6 +26,7 @@ type AuthContextValue = {
   profile: Profile | null;
   loading: boolean;
   configured: boolean;
+  configWarning: string | null;
   ensureGuestSession: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   createAccount: (email: string, displayName?: string) => Promise<{ error?: string }>;
@@ -85,7 +86,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data } = await supabase.auth.getSession();
     if (data.session) return;
     const { error } = await supabase.auth.signInAnonymously();
-    if (error) throw error;
+    if (error) {
+      // If EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY are a
+      // mismatched pair (different projects), every auth call fails with
+      // Supabase's generic "Invalid API key" — swap in the specific,
+      // actionable reason when we can detect that, instead of the dead end.
+      throw new Error(supabaseConfigWarning ?? error.message);
+    }
   }, []);
 
   // Parses a Supabase auth callback URL (magic link or OAuth redirect) and, if it
@@ -211,6 +218,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       profile,
       loading,
       configured: isSupabaseConfigured,
+      configWarning: supabaseConfigWarning,
       ensureGuestSession,
       refreshProfile,
       createAccount,

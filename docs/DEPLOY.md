@@ -7,23 +7,74 @@
 | Local | Expo (`npm start`) | Supabase local or shared **dev** project |
 | Dev / Prod web | Azure Static Web Apps | Separate Supabase **dev** / **prod** projects |
 
-Never put `OPENAI_API_KEY` or the service role key in Expo/`EXPO_PUBLIC_*` variables.
+Never put `GEMINI_API_KEY` or the service role key in Expo/`EXPO_PUBLIC_*` variables — the key must only ever exist as a Supabase Edge Function secret (see below).
 
 ## Supabase (prod)
 
 1. Create a prod project.
 2. Enable **Anonymous** auth.
-3. Apply `supabase/migrations/20260311000000_initial.sql`.
+3. Apply migrations under `supabase/migrations/`.
 4. Deploy `judge-match` and set secrets:
 
 ```bash
 supabase link --project-ref <prod-ref>
 supabase db push
-supabase functions deploy judge-match
-supabase secrets set OPENAI_API_KEY=...
+supabase functions deploy judge-match --use-api
+supabase secrets set GEMINI_API_KEY=...
 ```
 
+`--use-api` is required here because `geminiJudge.ts` imports `src/lib/vision/types.ts` directly, outside `supabase/functions/`. Without the flag, the standard Docker-based deploy can't reach outside its own function subtree. Supabase's own docs still mark `--use-api` experimental (CLI ≥2.13.3) — if it misbehaves, the fallback is dropping the flag and duplicating the three `VisionJudge` types locally in `geminiJudge.ts` instead (that version is in git history). Note `--use-api` only affects **deploy**; local `supabase functions serve` still needs Docker either way.
+
+### Storing and reading `GEMINI_API_KEY`
+
+This is an **Edge Function secret**, not Supabase Vault — worth being precise about, since Supabase has two different things people call "the vault":
+
+- **Edge Function secrets** (what we use): environment variables scoped to Edge Functions, read via `Deno.env.get("GEMINI_API_KEY")`. That line is already in `judge-match/index.ts` — no extra retrieval code needed once the secret is set. This is the standard place for a third-party API key an Edge Function calls out to.
+- **Supabase Vault** (a different feature): an encrypted-secrets table living *inside Postgres*, meant for secrets a database function, trigger, or webhook needs to read via SQL (`vault.decrypted_secrets`). It's not designed for Edge Functions and isn't involved here — the two are easy to conflate because the Dashboard has separate pages for each.
+
+**To set it, pick one:**
+
+- **CLI** (what the command block above does):
+  ```bash
+  supabase secrets set GEMINI_API_KEY=your-key-here
+  ```
+  Or from a file: `supabase secrets set --env-file .env` (never commit that file).
+
+- **Dashboard**: your project → **Edge Functions** → **Secrets** (a different page from **Vault**, which appears separately in Database settings) → add `GEMINI_API_KEY` and its value → Save. Takes effect immediately, no redeploy needed.
+
+- **List / verify what's set**: `supabase secrets list` (shows names only, not values — there's no way to read a secret's value back out once set, by design).
+
+- **Local dev**: create `supabase/functions/.env` (already covered by the repo's root `.gitignore` `.env` pattern — double-check it isn't tracked before your first commit with it) with `GEMINI_API_KEY=...`. `supabase functions serve judge-match` picks it up automatically. See `supabase/functions/.env.example` for the expected shape.
+
+Get the key itself from [Google AI Studio](https://aistudio.google.com/apikey) — keys are now auto-created as "auth keys," no restricted/unrestricted config to pick.
+
+### Free tier tradeoff and the rate-limit decision
+
+We're on the **free tier** by deliberate MVP tradeoff (team decision, 2026-08-25): a free, working game beats a paid, polished one for this first pass, so the <3s latency target and best-possible judging quality are explicitly not being optimized for yet.
+
+**Resolved:** when the free tier's rate limit is hit (`429 RESOURCE_EXHAUSTED`), we don't retry (pointless within the same per-minute window) and we don't declare a draw. `judge-match` falls back to the same heuristic (non-AI) judge used when no key is configured at all — a real winner still gets picked. No new DB column tracks this (team preferred to avoid the schema change — see "Tracking and rolling back database changes" below); instead `app/results/[id].tsx` infers a "AI judging temporarily unavailable" notice from the rationale text the judge already writes to `match_submissions.rationale`, and the full structured record (including a `rate_limited`/`timeout`/`error_fallback`/`scored` outcome) is still written to the Edge Function's logs — see `judge-match/index.ts`'s `logJudgment`.
+
+**Still worth knowing going into the beta window:** the actual limits reported from the AI Studio page for `gemini-3.6-flash` are **RPM 5, TPM 250K, RPD 20**. One match = one Gemini request, so that's roughly **20 AI-judged matches per day** before everything else that day quietly runs on the heuristic judge instead. Against the "100 matches" beta target, that likely means either spreading the beta window across several days, or checking whether a different model / tier has more free-tier headroom before assuming 100 matches will actually exercise real AI judging rather than mostly the fallback.
+
 5. Confirm Storage bucket `drawings` exists and Realtime is enabled for `matches`, `rooms`, `match_submissions`.
+
+### Tracking and rolling back database changes
+
+**Tracking is already automatic, for free:** every schema change is a `.sql` file in `supabase/migrations/`, and that folder is just part of the repo — git history *is* the change log (who changed what, when, and why, via the commit that added the file). Supabase separately tracks which migrations have actually run against a given database in a `supabase_migrations.schema_migrations` table, so `supabase db push` only applies the files that database hasn't seen yet. The one rule that keeps this working: never hand-edit a database through the Dashboard's Table/SQL editor — every change goes through a migration file, or the two get out of sync.
+
+**Normal workflow (already what the two existing migrations in this repo follow):**
+```bash
+supabase migration new describe_the_change   # scaffolds a new timestamped .sql file
+# edit the file
+supabase db reset                            # replays ALL migrations against your local DB from scratch — catches mistakes here, for free, before anything shared is touched
+# commit the file, push/PR as normal
+supabase db push                             # applies only the new migration(s) to the linked (dev or prod) project
+```
+Running against local first, then a shared **dev** project, then **prod** last (per the Environments table above) means a bad migration gets caught before it ever reaches the database players' data lives in.
+
+**If a migration already applied and broke something:** there's no automatic "undo" — Supabase migrations are forward-only. The fix is to write a *new* migration that reverses the change (e.g. the mistake was `add column`, the fix is a follow-up migration with `drop column`), not to edit or delete the original file. This keeps the history honest and matches what everyone else's local/dev copies expect to apply next. If the tracking table itself ever gets out of sync with reality (e.g. someone applied something outside the CLI), `supabase migration repair` fixes the bookkeeping without running SQL.
+
+**Free tier has no safety net beyond that** — worth knowing given the whole stack is on free tiers by design: the Free Supabase plan has no automatic daily backups and no point-in-time recovery (both are Pro-plan-and-up add-ons). The documented fallback for Free plan projects is running `supabase db dump` yourself before anything risky and keeping that export somewhere safe. Given that, "test locally, then dev, then prod" above isn't just good practice here — for now it's the only real protection against a bad migration reaching data you can't get back.
 
 ## Azure Static Web Apps
 
@@ -76,7 +127,7 @@ requires a fresh build to take effect, since the values are baked in at build ti
 - [ ] Dev and prod Supabase isolated
 - [ ] Anonymous auth + email magic link configured
 - [ ] RLS migration applied
-- [ ] Judge function deployed; OpenAI secret set
+- [ ] Judge function deployed (`--use-api`); `GEMINI_API_KEY` secret set
 - [ ] Azure SWA HTTPS live
 - [ ] Smoke: lobby → room join (two clients) → draw → results
-- [ ] Measure `judge_latency_ms` stays under 3s when OpenAI is configured
+- [ ] Measure `judge_latency_ms` across a batch of matches (target <3s) and spot-check the Edge Function logs for `judge_result` outcomes — expect mostly `scored`, with `rate_limited` showing up once ~20 matches/day are exceeded

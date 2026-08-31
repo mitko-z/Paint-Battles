@@ -51,6 +51,19 @@ export default function ResultsScreen() {
           ? "You win"
           : "You lose";
 
+  // No judge_outcome column (team chose to skip that schema change) — so
+  // this is inferred from the rationale text the judge already writes to
+  // match_submissions, which was persisted either way. Both fallback
+  // paths (supabase/functions/judge-match/geminiJudge.ts and
+  // index.ts's heuristicJudge()) prefix their rationale with "AI judging"
+  // and embed the actual reason (missing key, rate limit, timeout, HTTP
+  // status, etc.) right in the text — shown as-is here for debugging.
+  // Fragile in the "literal prefix has to stay in sync" sense; update
+  // the check below if that wording changes.
+  const judgeNotice = [mySub?.rationale, oppSub?.rationale].find((r) =>
+    r?.startsWith("AI judging"),
+  );
+
   return (
     <Screen>
       <Text style={styles.title}>{outcome || "Results"}</Text>
@@ -58,6 +71,7 @@ export default function ResultsScreen() {
       {match?.judge_latency_ms != null ? (
         <Text style={styles.meta}>Judged in {match.judge_latency_ms}ms</Text>
       ) : null}
+      {judgeNotice ? <Text style={styles.notice}>{judgeNotice}</Text> : null}
 
       <View style={styles.row}>
         <ResultCard
@@ -123,13 +137,20 @@ const styles = StyleSheet.create({
   },
   meta: {
     marginTop: 4,
-    marginBottom: 20,
     color: colors.inkMuted,
     fontSize: 13,
+  },
+  notice: {
+    marginTop: 4,
+    marginBottom: 20,
+    color: colors.accentDark,
+    fontSize: 13,
+    fontStyle: "italic",
   },
   row: {
     flexDirection: "row",
     gap: 12,
+    marginTop: 16,
     marginBottom: 24,
   },
   card: {
