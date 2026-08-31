@@ -36,7 +36,8 @@
       "expo-web-browser"
     ],
     "experiments": {
-      "typedRoutes": true
+      "typedRoutes": true,
+      "baseUrl": "/Paint-Battles"
     },
     "extra": {
       "router": {},
