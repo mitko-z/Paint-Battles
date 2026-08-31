@@ -45,11 +45,13 @@ export default function ResultsScreen() {
   const outcome =
     !match || !user
       ? ""
-      : match.is_draw
-        ? "Draw"
-        : match.winner_id === user.id
-          ? "You win"
-          : "You lose";
+      : match.is_solo
+        ? "Nice sketch!"
+        : match.is_draw
+          ? "Draw"
+          : match.winner_id === user.id
+            ? "You win"
+            : "You lose";
 
   // No judge_outcome column (team chose to skip that schema change) — so
   // this is inferred from the rationale text the judge already writes to
@@ -80,12 +82,14 @@ export default function ResultsScreen() {
           rationale={mySub?.rationale}
           uri={publicUrl(mySub?.storage_path)}
         />
-        <ResultCard
-          label="Opponent"
-          score={oppSub?.score}
-          rationale={oppSub?.rationale}
-          uri={publicUrl(oppSub?.storage_path)}
-        />
+        {match?.is_solo ? null : (
+          <ResultCard
+            label="Opponent"
+            score={oppSub?.score}
+            rationale={oppSub?.rationale}
+            uri={publicUrl(oppSub?.storage_path)}
+          />
+        )}
       </View>
 
       <ErrorText message={error} />

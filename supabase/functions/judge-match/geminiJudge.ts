@@ -48,10 +48,21 @@
 // (see "rate_limited" outcome). Worth checking whether that's enough
 // headroom for the "100 matches" beta target, or whether it needs to
 // span several days / a higher tier / a different model.
+//
+// scoreSolo() (single-player mode, added 2026-09-01): same endpoint,
+// model, timeout/retry/rate-limit handling as the 1v1 score() path —
+// it just sends one image and asks for a single 0-100 score instead of
+// a head-to-head comparison. Deliberately NOT implemented as
+// score(input, input) (comparing an image against itself) — that would
+// burn a second inline image in the request for no reason and the
+// head-to-head prompt wording ("Image A then Image B... winner") makes
+// no sense for one drawing.
 import type {
   VisionJudge,
   VisionJudgeInput,
   VisionJudgeResult,
+  VisionSoloJudgeInput,
+  VisionSoloJudgeResult,
 } from "../../../src/lib/vision/types.ts";
 
 const GEMINI_MODEL = "gemini-3.5-flash";
@@ -93,16 +104,23 @@ class GeminiRateLimitError extends Error {}
 
 /**
  * Builds a VisionJudge backed by Gemini. `onLog` is called exactly once
- * per score() call with a structured record — R§5 requires every match
- * to produce a structured log so the "100 matches, no desync" beta
- * metric is actually countable, not eyeballed.
+ * per score()/scoreSolo() call with a structured record — R§5 requires
+ * every match to produce a structured log so the "100 matches, no
+ * desync" beta metric is actually countable, not eyeballed.
  *
  * `heuristicFallback` is what we hand back when the free-tier quota is
- * exhausted (HTTP 429). Team decision: a quota hit is not the same
- * situation as a genuine timeout/error (R3.3's "declare a draw") — it's
- * an expected, foreseeable state on the free tier, so it degrades to
- * the same non-AI heuristic judge used when no API key is configured at
- * all, rather than drawing every match until the quota resets.
+ * exhausted (HTTP 429) for a 1v1 match. Team decision: a quota hit is
+ * not the same situation as a genuine timeout/error (R3.3's "declare a
+ * draw") — it's an expected, foreseeable state on the free tier, so it
+ * degrades to the same non-AI heuristic judge used when no API key is
+ * configured at all, rather than drawing every match until the quota
+ * resets.
+ *
+ * `heuristicSoloFallback` is the single-player equivalent, used both
+ * for solo quota hits and for any solo timeout/error — a solo match has
+ * no opponent to "draw" against, so every solo failure mode degrades to
+ * the same deterministic backup scorer rather than a special-cased
+ * outcome.
  *
  * Debugging note: rather than a generic "AI unavailable" message, both
  * fallback paths embed a short reason straight into the rationale text
@@ -117,16 +135,17 @@ export function createGeminiJudge(
   matchId: string,
   onLog: (record: JudgeLogRecord) => void,
   heuristicFallback: (prompt: string, reason: string) => VisionJudgeResult,
+  heuristicSoloFallback: (prompt: string, reason: string) => VisionSoloJudgeResult,
 ): VisionJudge {
+  const shortReason = (err: unknown): string => {
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg.length > 140 ? `${msg.slice(0, 140)}…` : msg;
+  };
+
   return {
     async score(input: VisionJudgeInput): Promise<VisionJudgeResult> {
       const started = Date.now();
       const deadline = started + HARD_CEILING_MS;
-
-      const shortReason = (err: unknown): string => {
-        const msg = err instanceof Error ? err.message : String(err);
-        return msg.length > 140 ? `${msg.slice(0, 140)}…` : msg;
-      };
 
       const finish = (
         err: unknown,
@@ -208,6 +227,76 @@ export function createGeminiJudge(
         ? "timeout"
         : "error_fallback";
       return finish(lastError, outcome, attemptsMade, drawFallback(lastError));
+    },
+
+    async scoreSolo(input: VisionSoloJudgeInput): Promise<VisionSoloJudgeResult> {
+      const started = Date.now();
+      const deadline = started + HARD_CEILING_MS;
+
+      const finish = (
+        err: unknown,
+        outcome: JudgeOutcome,
+        attemptsMade: number,
+        result: VisionSoloJudgeResult,
+      ): VisionSoloJudgeResult => {
+        const message = err instanceof Error ? err.message : String(err);
+        onLog({
+          matchId,
+          provider: "gemini",
+          model: GEMINI_MODEL,
+          outcome,
+          attempts: attemptsMade,
+          latencyMs: Date.now() - started,
+          error: outcome === "scored" ? undefined : message,
+        });
+        return result;
+      };
+
+      let image: InlineImage;
+      try {
+        image = await fetchAsInlineData(input.imageUrl);
+      } catch (err) {
+        return finish(err, "error_fallback", 0, heuristicSoloFallback(input.prompt, shortReason(err)));
+      }
+
+      let lastError: unknown =
+        new GeminiTimeoutError("No time left in the 8s scoring budget");
+      let attemptsMade = 0;
+
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+
+        attemptsMade = attempt;
+        try {
+          const result = await callGeminiSolo(
+            apiKey,
+            input.prompt,
+            image,
+            Math.min(PER_ATTEMPT_TIMEOUT_MS, remaining),
+          );
+          return finish(undefined, "scored", attempt, result);
+        } catch (err) {
+          lastError = err;
+          if (err instanceof GeminiRateLimitError) break; // retrying now won't help — same RPM window
+        }
+      }
+
+      // Unlike the 1v1 path, a solo match has no opponent to "draw"
+      // against on failure — every failure mode (rate limit, timeout,
+      // error) degrades to the same deterministic backup scorer used
+      // when no API key is configured at all.
+      const outcome: JudgeOutcome = lastError instanceof GeminiRateLimitError
+        ? "rate_limited"
+        : lastError instanceof GeminiTimeoutError
+          ? "timeout"
+          : "error_fallback";
+      return finish(
+        lastError,
+        outcome,
+        attemptsMade,
+        heuristicSoloFallback(input.prompt, shortReason(lastError)),
+      );
     },
   };
 }
@@ -299,6 +388,84 @@ Return ONLY compact JSON, no markdown fences:
   if (!["A", "B", "draw"].includes(parsed.winner)) {
     parsed.winner = parsed.scoreA === parsed.scoreB ? "draw" : parsed.scoreA > parsed.scoreB ? "A" : "B";
   }
+  return parsed;
+}
+
+async function callGeminiSolo(
+  apiKey: string,
+  prompt: string,
+  image: InlineImage,
+  timeoutMs: number,
+): Promise<VisionSoloJudgeResult> {
+  const system =
+    `You are a fair judge for a 1-minute doodle contest.
+Score how well this sketch depicts the prompt subject — NOT artistic skill.
+Return ONLY compact JSON, no markdown fences:
+{"score":0-100,"rationale":"short"}`;
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: `${system}\n\nPrompt to draw: "${prompt}".` },
+              { inline_data: { mime_type: image.mimeType, data: image.base64 } },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.2,
+        },
+      }),
+    });
+  } catch (err) {
+    if (timedOut) throw new GeminiTimeoutError(`Gemini call exceeded ${timeoutMs}ms`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (res.status === 429) {
+    const text = await res.text();
+    throw new GeminiRateLimitError(`Gemini rate limit: ${text.slice(0, 300)}`);
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Gemini error: ${res.status} ${text.slice(0, 500)}`);
+  }
+
+  const data = await res.json();
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!content) {
+    const blockReason = data?.promptFeedback?.blockReason;
+    const finishReason = data?.candidates?.[0]?.finishReason;
+    throw new Error(
+      `Empty Gemini response (blockReason=${blockReason ?? "none"}, finishReason=${finishReason ?? "none"})`,
+    );
+  }
+
+  let parsed: VisionSoloJudgeResult;
+  try {
+    parsed = JSON.parse(content) as VisionSoloJudgeResult;
+  } catch {
+    throw new Error(`Gemini response wasn't valid JSON: ${content.slice(0, 200)}`);
+  }
+  parsed.score = clampScore(parsed.score);
   return parsed;
 }
 

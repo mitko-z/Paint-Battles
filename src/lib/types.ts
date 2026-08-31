@@ -29,7 +29,8 @@ export type Match = {
   id: string;
   room_id: string | null;
   player_a: string;
-  player_b: string;
+  player_b: string | null;
+  is_solo: boolean;
   prompt: string;
   status: MatchStatus;
   countdown_ends_at: string | null;

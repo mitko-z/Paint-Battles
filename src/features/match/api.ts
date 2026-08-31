@@ -7,6 +7,12 @@ export async function createRoom(): Promise<Room> {
   return data as Room;
 }
 
+export async function startSoloMatch(): Promise<Match> {
+  const { data, error } = await supabase.rpc("start_solo_match");
+  if (error) throw error;
+  return data as Match;
+}
+
 export async function joinRoom(code: string): Promise<Match> {
   const { data, error } = await supabase.rpc("join_room", { p_code: code });
   if (error) throw error;

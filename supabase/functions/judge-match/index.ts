@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { createGeminiJudge, type JudgeLogRecord } from "./geminiJudge.ts";
-import type { VisionJudgeResult } from "../../../src/lib/vision/types.ts";
+import type { VisionJudgeResult, VisionSoloJudgeResult } from "../../../src/lib/vision/types.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -66,8 +66,13 @@ Deno.serve(async (req) => {
       .select("*")
       .eq("match_id", matchId);
 
-    if (subError || !submissions || submissions.length < 2) {
-      return json({ error: "Both submissions required" }, 409);
+    // Single-player matches only ever have one submission to wait for.
+    const requiredSubmissions = match.is_solo ? 1 : 2;
+    if (subError || !submissions || submissions.length < requiredSubmissions) {
+      return json(
+        { error: match.is_solo ? "A submission is required" : "Both submissions required" },
+        409,
+      );
     }
 
     // NOTE (2026-08-27): a same-day attempt at an atomic "claim" here (CAS
@@ -94,20 +99,14 @@ Deno.serve(async (req) => {
     await admin.from("matches").update({ status: "judging" }).eq("id", matchId);
 
     // R3.1: "scoring latency" clock starts here — this is the earliest
-    // point the server can confirm both drawings are actually in. (It
+    // point the server can confirm the drawing(s) are actually in. (It
     // doesn't capture matchmaking/auth overhead above, which is
     // deliberate: those aren't Vision-scoring latency. It also doesn't
-    // capture realtime propagation back to both clients after we
+    // capture realtime propagation back to the client(s) after we
     // return — that's a separate client-side measurement if the team
-    // wants the full submit→both-clients-see-result number from R3.1's
+    // wants the full submit→client-sees-result number from R3.1's
     // definition.)
     const started = Date.now();
-
-    const subA = submissions.find((s) => s.user_id === match.player_a)!;
-    const subB = submissions.find((s) => s.user_id === match.player_b)!;
-
-    const urlA = admin.storage.from("drawings").getPublicUrl(subA.storage_path).data.publicUrl;
-    const urlB = admin.storage.from("drawings").getPublicUrl(subB.storage_path).data.publicUrl;
 
     // Structured per-match log line (R§5 instrumentation) — deliberately
     // NOT a DB column: the team decided the 100-match beta metric can be
@@ -118,9 +117,80 @@ Deno.serve(async (req) => {
       console.log(JSON.stringify({ event: "judge_result", ...record }));
     };
 
+    if (match.is_solo) {
+      // Single-player mode: one drawing, no opponent — score it against
+      // the prompt and go straight to results. Never touches wins/losses
+      // (those are the 1v1 win/loss record from the MVP spec; there's no
+      // opponent here to record a result against).
+      const subA = submissions[0];
+      const urlA = admin.storage.from("drawings").getPublicUrl(subA.storage_path).data.publicUrl;
+
+      let judgment: VisionSoloJudgeResult;
+      if (geminiKey) {
+        judgment = await createGeminiJudge(
+          geminiKey,
+          matchId,
+          logJudgment,
+          heuristicJudge,
+          heuristicJudgeSolo,
+        ).scoreSolo({ prompt: match.prompt, imageUrl: urlA });
+      } else {
+        // This branch never touches geminiJudge.ts, so log it here — otherwise
+        // "AI judging unavailable" would show up with nothing in the Edge
+        // Function logs explaining why.
+        logJudgment({
+          matchId,
+          provider: "gemini",
+          model: "n/a",
+          outcome: "no_api_key",
+          attempts: 0,
+          latencyMs: 0,
+          error: "GEMINI_API_KEY is not set — check `supabase secrets list`",
+        });
+        judgment = heuristicJudgeSolo(match.prompt, "GEMINI_API_KEY not set");
+      }
+
+      await admin
+        .from("match_submissions")
+        .update({ score: judgment.score, rationale: judgment.rationale ?? null })
+        .eq("id", subA.id);
+
+      const latency = Date.now() - started;
+
+      const { data: updatedMatch, error: updateError } = await admin
+        .from("matches")
+        .update({
+          status: "results",
+          winner_id: null,
+          is_draw: false,
+          judge_latency_ms: latency,
+        })
+        .eq("id", matchId)
+        .select("*")
+        .single();
+
+      if (updateError) {
+        return json({ error: updateError.message }, 500);
+      }
+
+      return json({ match: updatedMatch, judgment, latencyMs: latency });
+    }
+
+    const subA = submissions.find((s) => s.user_id === match.player_a)!;
+    const subB = submissions.find((s) => s.user_id === match.player_b)!;
+
+    const urlA = admin.storage.from("drawings").getPublicUrl(subA.storage_path).data.publicUrl;
+    const urlB = admin.storage.from("drawings").getPublicUrl(subB.storage_path).data.publicUrl;
+
     let judgment: VisionJudgeResult;
     if (geminiKey) {
-      judgment = await createGeminiJudge(geminiKey, matchId, logJudgment, heuristicJudge).score({
+      judgment = await createGeminiJudge(
+        geminiKey,
+        matchId,
+        logJudgment,
+        heuristicJudge,
+        heuristicJudgeSolo,
+      ).score({
         prompt: match.prompt,
         imageAUrl: urlA,
         imageBUrl: urlB,
@@ -230,5 +300,19 @@ function heuristicJudge(prompt: string, reason = "no GEMINI_API_KEY configured")
     winner: seed === 0 ? "A" : "B",
     rationaleA: `AI judging unavailable (${reason}) — used backup scorer.`,
     rationaleB: `AI judging unavailable (${reason}) — used backup scorer.`,
+  };
+}
+
+function heuristicJudgeSolo(
+  prompt: string,
+  reason = "no GEMINI_API_KEY configured",
+): VisionSoloJudgeResult {
+  // Single-player equivalent of heuristicJudge() above — same idea
+  // (deterministic placeholder, reason embedded in the rationale), just
+  // one score instead of two.
+  const seed = prompt.length % 2;
+  return {
+    score: seed === 0 ? 72 : 68,
+    rationale: `AI judging unavailable (${reason}) — used backup scorer.`,
   };
 }

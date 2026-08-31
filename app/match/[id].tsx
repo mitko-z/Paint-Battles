@@ -163,7 +163,9 @@ export default function MatchScreen() {
         {match.status === "drawing" ? (
           <Text style={styles.timer}>
             {hasSubmitted
-              ? `Submitted — ${Math.max(drawingClock.remainingSec, 0)}s left for opponent`
+              ? match.is_solo
+                ? "Submitted!"
+                : `Submitted — ${Math.max(drawingClock.remainingSec, 0)}s left for opponent`
               : `${Math.max(drawingClock.remainingSec, 0)}s`}
           </Text>
         ) : null}
@@ -204,9 +206,13 @@ export default function MatchScreen() {
         <View style={styles.waitBox}>
           <Text style={styles.waitText}>
             {match.status === "submitting"
-              ? "Waiting for opponent’s drawing…"
+              ? match.is_solo
+                ? "Submitting your drawing…"
+                : "Waiting for opponent’s drawing…"
               : match.status === "judging"
-                ? "Scoring both sketches…"
+                ? match.is_solo
+                  ? "Scoring your sketch…"
+                  : "Scoring both sketches…"
                 : "Hold tight…"}
           </Text>
         </View>
