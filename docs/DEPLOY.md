@@ -76,16 +76,24 @@ Running against local first, then a shared **dev** project, then **prod** last (
 
 **Free tier has no safety net beyond that** — worth knowing given the whole stack is on free tiers by design: the Free Supabase plan has no automatic daily backups and no point-in-time recovery (both are Pro-plan-and-up add-ons). The documented fallback for Free plan projects is running `supabase db dump` yourself before anything risky and keeping that export somewhere safe. Given that, "test locally, then dev, then prod" above isn't just good practice here — for now it's the only real protection against a bad migration reaching data you can't get back.
 
-## Azure Static Web Apps
+## GitHub Pages
 
-1. Create a Static Web App in Azure (GitHub integration or token-based).
-2. Add GitHub repo secrets:
-   - `AZURE_STATIC_WEB_APPS_API_TOKEN` — from Azure SWA → Manage deployment token
-   - `EXPO_PUBLIC_SUPABASE_URL` — prod Supabase URL
-   - `EXPO_PUBLIC_SUPABASE_ANON_KEY` — prod anon key
-3. Push to `main` (or run the workflow manually). The workflow typechecks, exports Expo web to `dist/`, and deploys.
+Deploys are **tag-triggered, not branch-triggered**: pushing a `vX.Y.Z` tag is what ships a build (`.github/workflows/deploy-latest-tag.yml`). A `check` job compares the pushed tag against every other tag in the repo (`git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1`) and the build/deploy jobs only run if it's the highest one, so an out-of-order hotfix tag can never accidentally regress production. Plain pushes to `main` do **not** deploy anything by themselves.
 
-SPA routing is handled by `staticwebapp.config.json` (copied into `dist` during CI).
+We moved off Azure Static Web Apps (2026-08-31) — the account it was created under belonged to a teammate who's since left, and the corporate Azure account replacing it turned out to be read-only (no permission to create resources). GitHub Pages needs **no external account at all** since the repo is public, which sidesteps that problem entirely.
+
+**One-time setup (human, ~2 minutes, no CLI):**
+1. Repo → **Settings → Pages → Build and deployment → Source** → set to **"GitHub Actions"** (not "Deploy from a branch").
+2. Repo → **Settings → Environments → `github-pages`** (auto-created by step 1) → **Deployment branches and tags**. By default this only allows the default branch (`main`) — since we deploy from tags, not branches, add a **Tag** rule with pattern `v*` (or set it to "No restriction"; the workflow's own `check` job already gates on highest-semver-tag, so this is belt-and-suspenders either way). **Skipping this step is the single most likely first-deploy failure** — it fails late, after the build succeeds, with `Tag "vX.Y.Z" is not allowed to deploy to github-pages due to environment protection rules.`
+3. Confirm `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY` are already set as repo secrets (Settings → Secrets and variables → Actions) — carried over from the original setup, GitHub Pages doesn't need any secret of its own.
+
+**Ship a version:** `git tag v1.0.0 && git push origin v1.0.0` (bump the number each release; tag whatever commit is on `main` when you cut a release). Or re-run manually from the Actions tab (`workflow_dispatch`) to redeploy the current highest tag without cutting a new one.
+
+Watch the run under the repo's **Actions** tab; the live URL is `https://mitko-z.github.io/Paint-Battles/` (shown on Settings → Pages once the first deploy succeeds) — worth pinning/sharing once, since it never changes across releases.
+
+**Subpath gotcha, already handled:** GitHub Pages serves a project repo under `/Paint-Battles/`, not the domain root, so `app.json`'s `experiments.baseUrl` is set to `/Paint-Battles` — without it, the exported build's asset URLs would resolve at the wrong path and the page would load blank. If the repo is ever renamed, this value has to be updated to match. This also means local `expo start --web` now serves under `http://localhost:8081/Paint-Battles/` instead of the root — open that path, not `localhost:8081/`, when testing web locally.
+
+SPA routing (so a deep link like `/room` doesn't 404 on a fresh page load) is handled by copying `dist/index.html` to `dist/404.html` during CI — GitHub Pages serves that on any unmatched path, and expo-router's client-side router then takes over. `staticwebapp.config.json` is a leftover from the Azure attempt and is no longer used by the deploy — safe to delete whenever, harmless to leave.
 
 ## Mobile binaries
 
