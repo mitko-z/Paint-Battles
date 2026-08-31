@@ -1,42 +1,70 @@
-name: Deploy web to Azure Static Web Apps
+name: Deploy latest tag to Azure Static Web Apps
 
+# Fires only on version tags like v1.2.3 (pushed via: git tag v1.2.3 && git push origin v1.2.3).
+# Every tag build is checked against all other tags in the repo; only the highest
+# semver tag actually gets deployed to the public production URL, so pushing an
+# older/hotfix tag by mistake never regresses what's live.
 on:
   push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened, closed]
-    branches: [main]
-  workflow_dispatch:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch: {}
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
   build_and_deploy:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    name: Build and Deploy
+    name: Build and deploy latest tag
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (all tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check this tag is the highest version tag
+        id: check
+        run: |
+          CURRENT="${GITHUB_REF#refs/tags/}"
+          LATEST=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)
+          echo "Pushed tag:  $CURRENT"
+          echo "Highest tag: $LATEST"
+          if [ "$CURRENT" != "$LATEST" ]; then
+            echo "This tag is not the highest version — skipping deploy so production isn't downgraded."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-node@v4
+        if: steps.check.outputs.skip != 'true'
         with:
           node-version: 20
           cache: npm
 
-      - name: Install
+      - name: Install dependencies
+        if: steps.check.outputs.skip != 'true'
         run: npm ci
 
       - name: Typecheck
+        if: steps.check.outputs.skip != 'true'
         run: npm run typecheck
 
-      - name: Export web
+      - name: Export web build
+        if: steps.check.outputs.skip != 'true'
         env:
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
         run: npx expo export --platform web --output-dir dist
 
-      - name: Copy SWA config
+      - name: Copy Azure SWA routing config
+        if: steps.check.outputs.skip != 'true'
         run: cp staticwebapp.config.json dist/staticwebapp.config.json
 
       - name: Deploy to Azure Static Web Apps
+        if: steps.check.outputs.skip != 'true'
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
@@ -46,11 +74,6 @@ jobs:
           skip_app_build: true
           skip_api_build: true
 
-  close_pr:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: Azure/static-web-apps-deploy@v1
-        with:
-          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
-          action: close
+      - name: Write summary
+        if: steps.check.outputs.skip != 'true'
+        run: echo "Deployed **${GITHUB_REF#refs/tags/}** as the live production version." >> "$GITHUB_STEP_SUMMARY"

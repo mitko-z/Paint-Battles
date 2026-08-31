@@ -78,12 +78,15 @@ Running against local first, then a shared **dev** project, then **prod** last (
 
 ## Azure Static Web Apps
 
-1. Create a Static Web App in Azure (GitHub integration or token-based).
-2. Add GitHub repo secrets:
-   - `AZURE_STATIC_WEB_APPS_API_TOKEN` — from Azure SWA → Manage deployment token
+Deploys are **tag-triggered, not branch-triggered**: pushing a `vX.Y.Z` tag is what ships a build. The workflow checks that tag against every other tag in the repo (`git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1`) and only deploys if it's the highest one, so an out-of-order hotfix tag can never accidentally regress production. Plain pushes to `main` do **not** deploy anything by themselves.
+
+1. Create a Static Web App in Azure (token-based — do **not** use Azure's "GitHub integration" creation flow, it overwrites this repo's workflow file with its own branch-triggered one).
+2. Add GitHub repo secrets (Settings → Secrets and variables → Actions):
+   - `AZURE_STATIC_WEB_APPS_API_TOKEN` — from Azure SWA → Overview → Manage deployment token. **If the resource is ever recreated (e.g. it lived in a departed teammate's Azure subscription), this token changes and the secret must be updated** — the old token silently stops working, it doesn't error loudly in the Azure portal, only in the failed GitHub Actions run.
    - `EXPO_PUBLIC_SUPABASE_URL` — prod Supabase URL
    - `EXPO_PUBLIC_SUPABASE_ANON_KEY` — prod anon key
-3. Push to `main` (or run the workflow manually). The workflow typechecks, exports Expo web to `dist/`, and deploys.
+3. Ship a version: `git tag v1.0.0 && git push origin v1.0.0` (bump the number each release; tag whatever commit is on `main` when you cut a release). Or re-run manually from the Actions tab (`workflow_dispatch`) to redeploy the current highest tag without cutting a new one.
+4. Watch the run under the repo's **Actions** tab; the "latest" URL is on the Static Web App resource's **Overview** page in the Azure portal (`https://<name>.azurestaticapps.net`) — worth pinning/sharing once, since it never changes across releases.
 
 SPA routing is handled by `staticwebapp.config.json` (copied into `dist` during CI).
 
