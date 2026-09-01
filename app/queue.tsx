@@ -7,6 +7,8 @@ import { getMyActiveMatch, joinQueue, leaveQueue, subscribeForUserMatches } from
 import { supabase } from "@/lib/supabase";
 import { colors, fonts } from "@/lib/theme";
 
+const OPPONENT_SEARCH_TIMEOUT_MS = 30000;
+
 // Supabase RPC errors (PostgrestError) are plain objects, not instances of
 // the native Error class — `e instanceof Error` is false for them and
 // `String(e)` collapses to the useless "[object Object]". Pull `.message`
@@ -27,11 +29,13 @@ export default function QueueScreen() {
   const { ensureGuestSession } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(true);
+  const [timedOut, setTimedOut] = useState(false);
 
   useEffect(() => {
     let unsub = () => {};
     let cancelled = false;
     let poll: ReturnType<typeof setInterval> | null = null;
+    let searchTimeout: ReturnType<typeof setTimeout> | null = null;
 
     const gotMatch = (matchId: string) => {
       if (cancelled) return;
@@ -55,6 +59,7 @@ export default function QueueScreen() {
 
     void (async () => {
       try {
+        setTimedOut(false);
         await ensureGuestSession();
         const { data } = await supabase.auth.getUser();
         const userId = data.user?.id;
@@ -69,6 +74,14 @@ export default function QueueScreen() {
           return;
         }
         setSearching(true);
+
+        // R1.5: an indefinite spinner looks identical to "everything is
+        // broken." After 30s with no opponent, say so plainly and make
+        // sure Cancel is easy to find, instead of leaving the player to
+        // guess whether matchmaking is stuck.
+        searchTimeout = setTimeout(() => {
+          if (!cancelled) setTimedOut(true);
+        }, OPPONENT_SEARCH_TIMEOUT_MS);
 
         // Two things this loop needs to guard against:
         // 1. Realtime delivery isn't guaranteed to be live yet when we
@@ -109,6 +122,7 @@ export default function QueueScreen() {
       cancelled = true;
       unsub();
       if (poll) clearInterval(poll);
+      if (searchTimeout) clearTimeout(searchTimeout);
       void leaveQueue();
     };
   }, [ensureGuestSession]);
@@ -116,14 +130,23 @@ export default function QueueScreen() {
   return (
     <Screen>
       <Text style={styles.title}>Finding opponent</Text>
-      <Text style={styles.sub}>Hang tight — pairing with the next player in queue.</Text>
+      <Text style={styles.sub}>
+        {timedOut
+          ? "Still looking — no one's available to match with right now."
+          : "Hang tight — pairing with the next player in queue."}
+      </Text>
       <View style={styles.center}>
         {searching ? <ActivityIndicator size="large" color={colors.accent} /> : null}
       </View>
+      {timedOut ? (
+        <Text style={styles.timeoutNote}>
+          You can keep waiting, or cancel and try again later.
+        </Text>
+      ) : null}
       <ErrorText message={error} />
       <PrimaryButton
         label="Cancel"
-        variant="secondary"
+        variant={timedOut ? "primary" : "secondary"}
         onPress={async () => {
           await leaveQueue();
           router.replace("/lobby");
@@ -149,5 +172,11 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
+  },
+  timeoutNote: {
+    color: colors.inkMuted,
+    fontSize: 14,
+    textAlign: "center",
+    marginBottom: 16,
   },
 });
