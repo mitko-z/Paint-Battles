@@ -4,7 +4,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { BrandTitle, ErrorText, PrimaryButton, Screen } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
-import { createRoom, getMyActiveMatch, joinRoom } from "@/features/match/api";
+import { createRoom, getMyActiveMatch, joinRoom, startSoloMatch } from "@/features/match/api";
 import { colors, fonts } from "@/lib/theme";
 
 export default function LobbyScreen() {
@@ -79,6 +79,17 @@ export default function LobbyScreen() {
         {configWarning ? <Text style={styles.warn}>{configWarning}</Text> : null}
 
         <View style={styles.actions}>
+          <PrimaryButton
+            label="Single player mode"
+            variant="secondary"
+            loading={busy}
+            onPress={() =>
+              withAuth(async () => {
+                const match = await startSoloMatch();
+                router.replace(`/match/${match.id}`);
+              })
+            }
+          />
           <PrimaryButton
             label="Find opponent"
             loading={busy}
