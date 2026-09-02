@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { AppState, Platform, StyleSheet, Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { ErrorText, PrimaryButton, Screen } from "@/components/ui";
 import { DrawingCanvas, type DrawingCanvasHandle } from "@/features/canvas/DrawingCanvas";
 import { useAuth } from "@/features/auth/AuthProvider";
 import {
+  forfeitMatch,
   getMatch,
+  heartbeat,
   requestJudgment,
   submitDrawing,
   subscribeToMatch,
@@ -37,9 +39,20 @@ export default function MatchScreen() {
   // fixes. This just stops the wasteful, redundant calls from *this* one.
   const judgeRequestedRef = useRef(false);
   const canvasRef = useRef<DrawingCanvasHandle>(null);
+  // Root Cause A (forfeit/presence): event listeners below are attached
+  // once (empty dep arrays) so they don't thrash on every match/status
+  // change, so they read the latest match through a ref rather than a
+  // stale closure. foregroundedRef gates heartbeats — see the AppState
+  // effect further down.
+  const matchRef = useRef<Match | null>(null);
+  const foregroundedRef = useRef(true);
 
   const countdown = useServerCountdown(match?.countdown_ends_at);
   const drawingClock = useServerCountdown(match?.drawing_ends_at);
+
+  useEffect(() => {
+    matchRef.current = match;
+  }, [match]);
 
   const refresh = useCallback(async () => {
     if (!id) return;
@@ -47,6 +60,13 @@ export default function MatchScreen() {
     setMatch(next);
     if (next?.status === "results") {
       router.replace(`/results/${next.id}`);
+    } else if (next?.status === "cancelled") {
+      // Both players gone, or a solo match abandoned before submitting —
+      // nothing to show a result for (see the forfeit_and_presence
+      // migration's _resolve_abandoned()). Reopening later already lands
+      // here via lobby.tsx's own getMyActiveMatch() check; this just
+      // covers the case where the screen is already open when it happens.
+      router.replace("/lobby");
     }
   }, [id]);
 
@@ -61,16 +81,79 @@ export default function MatchScreen() {
       setMatch(next);
       if (next.status === "results") {
         router.replace(`/results/${next.id}`);
+      } else if (next.status === "cancelled") {
+        router.replace("/lobby");
       }
     });
+    // Proof-of-life ping, piggybacked on the poll this screen already
+    // runs rather than a second timer. Skipped while backgrounded
+    // (foregroundedRef) — an absent heartbeat, not an explicit signal,
+    // is what the server-side presence sweep treats as "gone" after 10s.
+    // Best-effort: a dropped heartbeat here and there is expected and
+    // shouldn't interrupt drawing, so failures are swallowed.
+    const sendHeartbeat = () => {
+      if (foregroundedRef.current) void heartbeat(id).catch(() => {});
+    };
+    sendHeartbeat();
     const poll = setInterval(() => {
       void refresh();
+      sendHeartbeat();
     }, 2000);
     return () => {
       unsub();
       clearInterval(poll);
     };
   }, [id, refresh]);
+
+  // Presence: heartbeats (above) only mean anything if we also stop sending
+  // them the moment the app isn't actually in front of the player. AppState
+  // covers both platforms here — react-native-web maps it to the Page
+  // Visibility API, so this doesn't need a separate web-specific listener.
+  // Deliberately not trying to distinguish "a deliberate background" from
+  // "a fluke" — that judgment call is what the server-side grace window
+  // (see the forfeit_and_presence migration) is for, not the client.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      foregroundedRef.current = state === "active";
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Web only: resolve an explicit close (tab close, refresh, navigating
+  // away) immediately rather than waiting out the presence grace above —
+  // see forfeitMatch()'s own comment for why this needs a raw
+  // fetch(keepalive) rather than supabase-js's normal client. There's no
+  // native equivalent of `pagehide`/`beforeunload` — a killed app doesn't
+  // get a chance to run JS, so native relies entirely on the AppState +
+  // presence-sweep path above (see item 1.1's warning banner in the JSX
+  // below, which covers both platforms since a mobile OS won't let JS
+  // block backgrounding with a confirm dialog the way beforeunload can).
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+
+    const stillLive = (m: Match | null): m is Match =>
+      !!m && m.status !== "results" && m.status !== "cancelled";
+
+    const onPageHide = () => {
+      const current = matchRef.current;
+      if (!stillLive(current) || submittedRef.current) return;
+      void forfeitMatch(current.id);
+    };
+
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      const current = matchRef.current;
+      if (!current || current.status !== "drawing" || submittedRef.current) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, []);
 
   // Advance phases when local timer hits zero
   useEffect(() => {
@@ -173,6 +256,9 @@ export default function MatchScreen() {
           <Text style={styles.timer}>Submitting…</Text>
         ) : null}
         {match.status === "judging" ? <Text style={styles.timer}>AI judging…</Text> : null}
+        {match.status === "drawing" && !hasSubmitted ? (
+          <Text style={styles.closeWarning}>Leaving now forfeits this round.</Text>
+        ) : null}
       </View>
 
       {showCanvas ? (
@@ -247,6 +333,11 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "800",
     color: colors.accentDark,
+  },
+  closeWarning: {
+    marginTop: 6,
+    fontSize: 13,
+    color: colors.danger,
   },
   canvasWrap: {
     flex: 1,

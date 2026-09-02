@@ -163,6 +163,7 @@ Deno.serve(async (req) => {
           status: "results",
           winner_id: null,
           is_draw: false,
+          end_reason: "judged",
           judge_latency_ms: latency,
         })
         .eq("id", matchId)
@@ -237,6 +238,7 @@ Deno.serve(async (req) => {
         status: "results",
         winner_id: winnerId,
         is_draw: judgment.winner === "draw",
+        end_reason: "judged",
         judge_latency_ms: latency,
       })
       .eq("id", matchId)
