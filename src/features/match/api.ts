@@ -1,4 +1,4 @@
-import { getFunctionsUrl, supabase } from "@/lib/supabase";
+import { getFunctionsUrl, getRestRpcUrl, supabase } from "@/lib/supabase";
 import type { Match, MatchSubmission, Room } from "@/lib/types";
 
 export async function createRoom(): Promise<Room> {
@@ -130,6 +130,55 @@ export async function uploadDrawingPng(
   });
   if (error) throw error;
   return path;
+}
+
+// Proof-of-life ping (Root Cause A — see the forfeit_and_presence
+// migration). Called on the match screen's existing ~2-4s poll cadence
+// while it's mounted, visible, and foregrounded; the server treats an
+// absent heartbeat, not an explicit "I left" signal, as "gone" after
+// 10s. Errors are the caller's problem to decide whether to surface —
+// a missed heartbeat now and then is expected (a slow tick, a brief
+// network blip) and shouldn't interrupt drawing.
+export async function heartbeat(matchId: string): Promise<void> {
+  const { error } = await supabase.rpc("heartbeat", { p_match_id: matchId });
+  if (error) throw error;
+}
+
+// Explicit-close fast path: an instant forfeit rather than waiting out
+// the 10s presence grace. Built as a raw fetch with `keepalive: true`
+// (not supabase-js's own client) specifically so it can be fired from a
+// `pagehide` handler and still have a chance to land after the page
+// starts unloading — `navigator.sendBeacon` would survive unload too,
+// but can't carry the Authorization header an authenticated RPC call
+// needs. Safe to call from a normal awaited context as well (keepalive
+// only matters if the page is mid-unload); a match that's already
+// resolved by the time this lands is a silent no-op server-side, not
+// an error, so this deliberately never throws on that outcome.
+export async function forfeitMatch(matchId: string): Promise<void> {
+  // The whole body is best-effort, not just the fetch — this is called as
+  // `void forfeitMatch(...)` (fire-and-forget, nothing awaits it), so any
+  // unhandled rejection anywhere in here — however unlikely — would just
+  // surface as console noise instead of being caught. The presence sweep
+  // (advance_match_phases()) is the real backstop if this never lands.
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) return; // nothing to forfeit as — no session to forfeit with
+
+    const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
+    await fetch(getRestRpcUrl("forfeit_match"), {
+      method: "POST",
+      keepalive: true,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: anonKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ p_match_id: matchId }),
+    });
+  } catch {
+    // Best-effort by design — see the comment above.
+  }
 }
 
 export async function requestJudgment(matchId: string) {

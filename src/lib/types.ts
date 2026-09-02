@@ -7,6 +7,11 @@ export type MatchStatus =
   | "results"
   | "cancelled";
 
+// How a terminal match (status "results" or "cancelled") got there.
+// null for a match still in progress, or a pre-2026-09-01 row from
+// before this column existed.
+export type MatchEndReason = "judged" | "forfeit" | "abandoned";
+
 export type Profile = {
   id: string;
   display_name: string;
@@ -38,6 +43,7 @@ export type Match = {
   submit_deadline_at: string | null;
   winner_id: string | null;
   is_draw: boolean;
+  end_reason: MatchEndReason | null;
   judge_latency_ms: number | null;
   created_at: string;
 };

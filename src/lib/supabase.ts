@@ -125,6 +125,16 @@ export function getFunctionsUrl(path: string) {
   return `${supabaseUrl.replace(/\/$/, "")}/functions/v1/${path}`;
 }
 
+// Raw PostgREST RPC endpoint for a given function — same destination
+// supabase-js's own `.rpc()` posts to, exposed directly for the one
+// caller (forfeitMatch's pagehide path in app/match/[id].tsx) that needs
+// fetch(..., {keepalive: true}) instead of supabase-js's normal client:
+// keepalive is what survives page unload, and unlike navigator.sendBeacon
+// it supports the Authorization header an authenticated RPC call needs.
+export function getRestRpcUrl(fn: string) {
+  return `${supabaseUrl.replace(/\/$/, "")}/rest/v1/rpc/${fn}`;
+}
+
 /** Deep link the auth email/OAuth flows redirect back to once a session is issued. */
 export function getAuthRedirectUrl() {
   return Linking.createURL("auth/callback");

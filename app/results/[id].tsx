@@ -66,6 +66,19 @@ export default function ResultsScreen() {
     r?.startsWith("AI judging"),
   );
 
+  // Root Cause A: a forfeited match never went through AI judging, so
+  // there's no score/rationale to show for whichever side left — say so
+  // plainly instead of letting the score cards render as unexplained
+  // blanks. Solo matches can't forfeit (an abandoned solo match ends in
+  // 'cancelled', not 'results' — see the forfeit_and_presence
+  // migration), so this only ever applies to a real 1v1 outcome.
+  const forfeitNotice =
+    match?.end_reason === "forfeit"
+      ? match.winner_id === user?.id
+        ? "Your opponent left the match — you win by forfeit."
+        : "You left the match, so this round is recorded as a loss."
+      : null;
+
   return (
     <Screen>
       <Text style={styles.title}>{outcome || "Results"}</Text>
@@ -73,7 +86,11 @@ export default function ResultsScreen() {
       {match?.judge_latency_ms != null ? (
         <Text style={styles.meta}>Judged in {match.judge_latency_ms}ms</Text>
       ) : null}
-      {judgeNotice ? <Text style={styles.notice}>{judgeNotice}</Text> : null}
+      {forfeitNotice ? (
+        <Text style={styles.notice}>{forfeitNotice}</Text>
+      ) : judgeNotice ? (
+        <Text style={styles.notice}>{judgeNotice}</Text>
+      ) : null}
 
       <View style={styles.row}>
         <ResultCard
