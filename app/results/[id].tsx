@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { ErrorText, PrimaryButton, Screen } from "@/components/ui";
@@ -7,6 +7,13 @@ import { getMatch, getSubmissions, requestJudgment } from "@/features/match/api"
 import { supabase } from "@/lib/supabase";
 import type { Match, MatchSubmission } from "@/lib/types";
 import { colors, fonts } from "@/lib/theme";
+import { useAudioPlayer } from "expo-audio";
+
+// Result cue sounds - preloaded up front (useAudioPlayer() starts loading its source
+// as soon as it is called) the same way app/match/[id].tsx preloads its cues, so
+// playback is instant once the outcome is known.
+const winAudio = require("../../assets/you win.mp3");
+const loseAudio = require("../../assets/you lose.mp3");
 
 export default function ResultsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -14,6 +21,14 @@ export default function ResultsScreen() {
   const [match, setMatch] = useState<Match | null>(null);
   const [subs, setSubs] = useState<MatchSubmission[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const winPlayer = useAudioPlayer(winAudio);
+  const losePlayer = useAudioPlayer(loseAudio);
+  // One-shot guard so the win/lose cue fires exactly once per mount, the moment the
+  // result is known - same pattern as the countdown/tick/whistle cues in
+  // app/match/[id].tsx. This screen never re-renders a different match in place (a
+  // rematch routes through a fresh /results/[id] mount), so there's no reset case to
+  // handle here.
+  const resultCueFiredRef = useRef(false);
 
   useEffect(() => {
     if (!id) return;
@@ -33,6 +48,21 @@ export default function ResultsScreen() {
       }
     })();
   }, [id, refreshProfile]);
+
+  // Win/lose cue: fires once the result is known. Skipped for a draw (neither win nor
+  // lose) and for a solo match (no opponent to beat, hence the 'Nice sketch!' outcome).
+  useEffect(() => {
+    if (!match || !user || match.status !== "results" || resultCueFiredRef.current) return;
+    if (match.is_solo || match.is_draw) return;
+    resultCueFiredRef.current = true;
+    if (match.winner_id === user.id) {
+      winPlayer.seekTo(0);
+      winPlayer.play();
+    } else {
+      losePlayer.seekTo(0);
+      losePlayer.play();
+    }
+  }, [match, user, winPlayer, losePlayer]);
 
   const mySub = subs.find((s) => s.user_id === user?.id);
   const oppSub = subs.find((s) => s.user_id !== user?.id);
