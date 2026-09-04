@@ -58,12 +58,14 @@ export default function MatchScreen() {
   // Preloaded up front (see the requires above); played on cue by the effects below.
   const threeTwoOnePlayer = useAudioPlayer(threeTwoOneAudio);
   const whistlePlayer = useAudioPlayer(whistleAudio);
-  // Not wired to playback yet (that is the "10 seconds left" step) - kept here so it
-  // preloads alongside the other two cues, per the "preload the cue sounds" requirement.
   const clockTickPlayer = useAudioPlayer(clockTickAudio);
   // Guards the 3-2-1 cue so it fires exactly once per match, the moment the countdown
   // phase is first observed - not on every re-render while status stays "countdown".
   const countdownCueFiredRef = useRef(false);
+  // Same one-shot pattern for the "10 seconds left" tick during the drawing phase.
+  const tickCueFiredRef = useRef(false);
+  // Same one-shot pattern for the "time's up" whistle at the end of the drawing phase.
+  const timeUpCueFiredRef = useRef(false);
 
   const countdown = useServerCountdown(match?.countdown_ends_at);
   const drawingClock = useServerCountdown(match?.drawing_ends_at);
@@ -183,6 +185,57 @@ export default function MatchScreen() {
       void refresh();
     }
   }, [match, countdown.isDone, drawingClock.isDone, refresh]);
+
+  // "10 seconds left" warning: fires once, the moment the drawing phase's remaining
+  // time first reads 10s or less. clock-tick.mp3 is ~10s long by design, timed to run
+  // out right around when the time-up whistle below fires - but it's explicitly paused
+  // there (and whenever we leave "drawing" for any other reason) rather than relying on
+  // that timing, since a network hiccup or an early opponent submit can end the phase
+  // before the clip finishes on its own.
+  useEffect(() => {
+    if (!match) return;
+    if (
+      match.status === "drawing" &&
+      !tickCueFiredRef.current &&
+      drawingClock.remainingSec <= 10 &&
+      drawingClock.remainingSec > 0
+    ) {
+      tickCueFiredRef.current = true;
+      clockTickPlayer.seekTo(0);
+      clockTickPlayer.play();
+    }
+    // Reset the guard once we leave drawing, so a rematch on this same screen
+    // instance can play the cue again - and stop the tick itself: it's ~10s long
+    // and would otherwise keep playing on into the submitting/judging screens.
+    if (match.status !== "drawing") {
+      tickCueFiredRef.current = false;
+      clockTickPlayer.pause();
+    }
+  }, [match, drawingClock.remainingSec, clockTickPlayer]);
+
+  // "Time's up" whistle: fires once, the moment the drawing phase's shared timer
+  // hits zero. Reuses whistlePlayer (already used for the countdown->drawing cue) -
+  // the two are far enough apart in the match timeline not to collide.
+  useEffect(() => {
+    if (!match) return;
+    if (
+      match.status === "drawing" &&
+      drawingClock.isDone &&
+      !timeUpCueFiredRef.current
+    ) {
+      timeUpCueFiredRef.current = true;
+      // Cut the still-playing tick before the whistle - otherwise the two overlap
+      // for however much of the ~10s tick clip is left.
+      clockTickPlayer.pause();
+      whistlePlayer.seekTo(0);
+      whistlePlayer.play();
+    }
+    // Reset the guard once we leave drawing, so a rematch on this same screen
+    // instance can play the cue again.
+    if (match.status !== "drawing") {
+      timeUpCueFiredRef.current = false;
+    }
+  }, [match, drawingClock.isDone, whistlePlayer, clockTickPlayer]);
 
   // "3-2-1, prepare!" cue: fires once, the moment the match enters its 3-second
   // countdown phase. There is no video for this yet (audio-only for now, by design).
