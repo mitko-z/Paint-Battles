@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { ErrorText, PrimaryButton, Screen } from "@/components/ui";
+import { DripText, ErrorText, PrimaryButton, Screen } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { getMatch, getSubmissions, requestJudgment } from "@/features/match/api";
 import { supabase } from "@/lib/supabase";
@@ -111,7 +111,9 @@ export default function ResultsScreen() {
 
   return (
     <Screen>
-      <Text style={styles.title}>{outcome || "Results"}</Text>
+      <DripText style={styles.title} containerStyle={styles.titleStack}>
+        {outcome || "Results"}
+      </DripText>
       <Text style={styles.prompt}>Prompt: {match?.prompt ?? "…"}</Text>
       {match?.judge_latency_ms != null ? (
         <Text style={styles.meta}>Judged in {match.judge_latency_ms}ms</Text>
@@ -128,6 +130,7 @@ export default function ResultsScreen() {
           score={mySub?.score}
           rationale={mySub?.rationale}
           uri={publicUrl(mySub?.storage_path)}
+          tilt="left"
         />
         {match?.is_solo ? null : (
           <ResultCard
@@ -135,6 +138,7 @@ export default function ResultsScreen() {
             score={oppSub?.score}
             rationale={oppSub?.rationale}
             uri={publicUrl(oppSub?.storage_path)}
+            tilt="right"
           />
         )}
       </View>
@@ -150,14 +154,16 @@ function ResultCard({
   score,
   rationale,
   uri,
+  tilt,
 }: {
   label: string;
   score?: number | null;
   rationale?: string | null;
   uri?: string | null;
+  tilt: "left" | "right";
 }) {
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, tilt === "left" ? styles.cardTiltLeft : styles.cardTiltRight]}>
       <Text style={styles.cardLabel}>{label}</Text>
       <Text style={styles.score}>{score != null ? Math.round(score) : "—"}</Text>
       {uri ? (
@@ -175,62 +181,90 @@ function ResultCard({
   );
 }
 
+// The two score cards are styled as torn paper tickets pinned up after the fight -
+// a light, warm parchment (not the dark UI palette) on purpose, tilted a couple
+// degrees in opposite directions. That inversion is deliberate here only; text on
+// them uses fixed dark-on-light values rather than the theme's colors.ink (which is
+// tuned to be light text on this app's now-dark screens).
+const TICKET_BG = "#F5EFE3";
+const TICKET_INK = "#1B2A3D";
+
 const styles = StyleSheet.create({
   title: {
     fontFamily: fonts.display,
-    fontSize: 40,
+    fontSize: 34,
     color: colors.ink,
+  },
+  titleStack: {
+    marginBottom: 2,
   },
   prompt: {
     marginTop: 8,
-    fontSize: 18,
+    fontFamily: fonts.body,
+    fontSize: 16,
     color: colors.inkMuted,
   },
   meta: {
     marginTop: 4,
+    fontFamily: fonts.body,
     color: colors.inkMuted,
     fontSize: 13,
   },
   notice: {
     marginTop: 4,
     marginBottom: 20,
-    color: colors.accentDark,
+    fontFamily: fonts.body,
+    color: colors.gold,
     fontSize: 13,
     fontStyle: "italic",
   },
   row: {
     flexDirection: "row",
-    gap: 12,
-    marginTop: 16,
-    marginBottom: 24,
+    gap: 16,
+    marginTop: 20,
+    marginBottom: 28,
   },
   card: {
     flex: 1,
-    backgroundColor: colors.paperDeep,
-    borderRadius: 12,
+    backgroundColor: TICKET_BG,
+    borderRadius: 3,
     padding: 12,
-    borderWidth: 1,
-    borderColor: colors.ink,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  cardTiltLeft: {
+    transform: [{ rotate: "-2deg" }],
+  },
+  cardTiltRight: {
+    transform: [{ rotate: "2deg" }],
   },
   cardLabel: {
-    fontWeight: "700",
-    color: colors.ink,
+    fontFamily: fonts.bodyBold,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    fontSize: 12,
+    color: TICKET_INK,
   },
   score: {
-    fontSize: 32,
-    fontWeight: "800",
-    color: colors.accentDark,
-    marginVertical: 6,
+    fontFamily: fonts.display,
+    fontSize: 30,
+    color: colors.accent,
+    marginVertical: 4,
   },
   thumb: {
     width: "100%",
     height: 120,
     backgroundColor: colors.canvas,
-    borderRadius: 6,
+    borderRadius: 4,
   },
   rationale: {
     marginTop: 8,
+    fontFamily: fonts.body,
     fontSize: 12,
-    color: colors.inkMuted,
+    color: TICKET_INK,
+    opacity: 0.75,
   },
 });

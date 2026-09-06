@@ -5,9 +5,12 @@ import {
   Text,
   TextInput,
   View,
+  type StyleProp,
   type TextInputProps,
+  type TextStyle,
   type ViewStyle,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { colors, fonts } from "@/lib/theme";
 
 export function Screen({
@@ -20,10 +23,48 @@ export function Screen({
   return <View style={[styles.screen, style]}>{children}</View>;
 }
 
+// "Battle Poster" wordmark treatment: React Native's Text only supports a single
+// textShadow (color/offset/radius), so the layered red+blue "paint drip" look - easy
+// in CSS with multiple text-shadows - is faked the same way a comic/poster chromatic
+// outline usually is in RN: two extra copies of the same text, absolutely positioned a
+// couple px off in each accent color, sitting underneath the real (non-absolute) copy
+// that actually establishes the layout size. Shared here so both the lobby wordmark and
+// the results screen's "You win"/"You lose" headline use the same effect.
+export function DripText({
+  children,
+  style,
+  containerStyle,
+}: {
+  children: string;
+  style?: StyleProp<TextStyle>;
+  containerStyle?: ViewStyle;
+}) {
+  const topText = children + " "; // extra space to avoid clipping the right edge of the red drip
+  return (
+    <View style={[styles.dripStack, containerStyle]}>
+      <Text
+        style={[style, styles.dripBlue]}
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+      >
+        {children}
+      </Text>
+      <Text
+        style={[style, styles.dripRed]}
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+      >
+        {children}
+      </Text>
+      <Text style={style}>{topText}</Text>
+    </View>
+  );
+}
+
 export function BrandTitle() {
   return (
     <View style={styles.brandWrap}>
-      <Text style={styles.brand}>Drawing-Battle</Text>
+      <DripText style={styles.brand}>Paint Battles</DripText>
       <Text style={styles.tagline}>60 seconds. One prompt. AI picks the winner.</Text>
     </View>
   );
@@ -44,32 +85,51 @@ export function PrimaryButton({
   variant?: "primary" | "secondary" | "ghost";
   style?: ViewStyle;
 }) {
+  // Wood/leather bevel: a top-to-bottom gradient fill plus a darker flat bottom
+  // border reads as a chunky, slightly worn game button without needing any image
+  // assets - primary in the paint-drip red, secondary in a darker panel navy so it
+  // still reads as a button sitting on the same dark screen. Ghost stays flat/bare.
+  const gradient =
+    variant === "primary"
+      ? (["#E4415A", colors.accent] as const)
+      : variant === "secondary"
+        ? (["#3C597A", colors.paperDeep] as const)
+        : null;
+
+  const inner = loading ? (
+    <ActivityIndicator color={variant === "primary" ? colors.white : colors.ink} />
+  ) : (
+    <Text
+      style={[
+        styles.btnText,
+        variant === "primary" ? styles.btnTextPrimary : styles.btnTextDark,
+      ]}
+    >
+      {label}
+    </Text>
+  );
+
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled || loading}
-      style={({ pressed }) => [
-        styles.btn,
-        variant === "primary" && styles.btnPrimary,
-        variant === "secondary" && styles.btnSecondary,
-        variant === "ghost" && styles.btnGhost,
-        (disabled || loading) && styles.btnDisabled,
-        pressed && !disabled && styles.btnPressed,
-        style,
-      ]}
+      style={({ pressed }) => [pressed && !disabled && styles.btnPressed, style]}
     >
-      {loading ? (
-        <ActivityIndicator color={variant === "primary" ? colors.white : colors.ink} />
-      ) : (
-        <Text
+      {gradient ? (
+        <LinearGradient
+          colors={gradient}
           style={[
-            styles.btnText,
-            variant === "primary" && styles.btnTextPrimary,
-            variant !== "primary" && styles.btnTextDark,
+            styles.btn,
+            variant === "primary" ? styles.btnPrimaryBevel : styles.btnSecondaryBevel,
+            (disabled || loading) && styles.btnDisabled,
           ]}
         >
-          {label}
-        </Text>
+          {inner}
+        </LinearGradient>
+      ) : (
+        <View style={[styles.btn, styles.btnGhost, (disabled || loading) && styles.btnDisabled]}>
+          {inner}
+        </View>
       )}
     </Pressable>
   );
@@ -147,33 +207,51 @@ const styles = StyleSheet.create({
     marginBottom: 28,
     gap: 8,
   },
+  dripStack: {
+    position: "relative",
+    alignSelf: "flex-start",
+  },
+  dripBlue: {
+    position: "absolute",
+    top: 2,
+    left: -2,
+    color: colors.blue,
+  },
+  dripRed: {
+    position: "absolute",
+    top: 3,
+    left: 2,
+    color: colors.accent,
+  },
   brand: {
     fontFamily: fonts.display,
-    fontSize: 42,
-    lineHeight: 48,
+    fontSize: 34,
+    lineHeight: 38,
     color: colors.ink,
-    letterSpacing: -0.5,
   },
   tagline: {
-    fontSize: 16,
-    lineHeight: 22,
-    color: colors.inkMuted,
+    fontFamily: fonts.bodySemiBold,
+    fontSize: 15,
+    lineHeight: 20,
+    color: colors.gold,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
     maxWidth: 320,
   },
   btn: {
     minHeight: 52,
-    borderRadius: 10,
+    borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 18,
   },
-  btnPrimary: {
-    backgroundColor: colors.accent,
+  btnPrimaryBevel: {
+    borderBottomWidth: 3,
+    borderBottomColor: "#7C0F1F",
   },
-  btnSecondary: {
-    backgroundColor: colors.paperDeep,
-    borderWidth: 1.5,
-    borderColor: colors.ink,
+  btnSecondaryBevel: {
+    borderBottomWidth: 3,
+    borderBottomColor: "#0F1922",
   },
   btnGhost: {
     backgroundColor: "transparent",
@@ -185,8 +263,10 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
   },
   btnText: {
-    fontSize: 17,
-    fontWeight: "700",
+    fontFamily: fonts.bodySemiBold,
+    fontSize: 16,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   btnTextPrimary: {
     color: colors.white,
@@ -198,27 +278,32 @@ const styles = StyleSheet.create({
     color: colors.danger,
     marginTop: 8,
     fontSize: 14,
+    fontFamily: fonts.body,
   },
   success: {
     color: colors.success,
     marginTop: 8,
     fontSize: 14,
+    fontFamily: fonts.body,
   },
   fieldLabel: {
     color: colors.inkMuted,
     fontSize: 13,
-    fontWeight: "600",
+    fontFamily: fonts.bodySemiBold,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
     marginBottom: 6,
   },
   field: {
     borderWidth: 1.5,
-    borderColor: colors.ink,
-    borderRadius: 10,
+    borderColor: colors.inkMuted,
+    borderRadius: 9,
     paddingHorizontal: 14,
     minHeight: 50,
     fontSize: 16,
+    fontFamily: fonts.body,
     color: colors.ink,
-    backgroundColor: colors.white,
+    backgroundColor: colors.paperDeep,
   },
   tabs: {
     flexDirection: "row",
@@ -234,11 +319,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   tabActive: {
-    backgroundColor: colors.ink,
+    backgroundColor: colors.accent,
   },
   tabText: {
     fontSize: 15,
-    fontWeight: "700",
+    fontFamily: fonts.bodySemiBold,
     color: colors.inkMuted,
   },
   tabTextActive: {
@@ -257,5 +342,6 @@ const styles = StyleSheet.create({
   dividerLabel: {
     color: colors.inkMuted,
     fontSize: 13,
+    fontFamily: fonts.body,
   },
 });

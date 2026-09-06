@@ -115,12 +115,12 @@ const styles = StyleSheet.create({
   },
   input: {
     borderWidth: 1.5,
-    borderColor: colors.ink,
+    borderColor: colors.inkMuted,
     borderRadius: 10,
     paddingHorizontal: 14,
     minHeight: 48,
     marginBottom: 10,
-    backgroundColor: colors.white,
+    backgroundColor: colors.paperDeep,
     color: colors.ink,
   },
   section: {

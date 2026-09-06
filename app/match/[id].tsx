@@ -343,7 +343,14 @@ export default function MatchScreen() {
           <Text style={styles.timer}>Starting in {Math.max(countdown.remainingSec, 0)}</Text>
         ) : null}
         {match.status === "drawing" ? (
-          <Text style={styles.timer}>
+          <Text
+            style={[
+              styles.timer,
+              !hasSubmitted && drawingClock.remainingSec <= 10 && drawingClock.remainingSec > 0
+                ? styles.timerUrgent
+                : null,
+            ]}
+          >
             {hasSubmitted
               ? match.is_solo
                 ? "Submitted!"
@@ -415,32 +422,45 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   promptLabel: {
-    color: colors.inkMuted,
+    fontFamily: fonts.bodyBold,
+    color: colors.gold,
     textTransform: "uppercase",
     letterSpacing: 1.5,
     fontSize: 12,
-    fontWeight: "700",
   },
   prompt: {
     fontFamily: fonts.display,
-    fontSize: 36,
+    fontSize: 26,
+    lineHeight: 30,
     color: colors.ink,
     marginTop: 4,
   },
   timer: {
     marginTop: 6,
-    fontSize: 22,
-    fontWeight: "800",
-    color: colors.accentDark,
+    fontFamily: fonts.bodyBold,
+    fontSize: 20,
+    color: colors.ink,
+  },
+  // Once 10s or less remain, the countdown itself carries the urgency - matching the
+  // clock-tick.mp3 warning cue that fires at the same threshold.
+  timerUrgent: {
+    color: colors.accent,
   },
   closeWarning: {
     marginTop: 6,
+    fontFamily: fonts.body,
     fontSize: 13,
     color: colors.danger,
   },
   canvasWrap: {
     flex: 1,
     minHeight: 280,
+    marginTop: 4,
+    borderRadius: 10,
+    borderWidth: 3,
+    borderColor: colors.paperDeep,
+    overflow: "hidden",
+    transform: [{ rotate: "-0.4deg" }],
   },
   tools: {
     flexDirection: "row",
@@ -452,6 +472,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   meta: {
+    fontFamily: fonts.body,
     color: colors.inkMuted,
   },
   waitBox: {
@@ -460,6 +481,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   waitText: {
+    fontFamily: fonts.bodySemiBold,
     fontSize: 18,
     color: colors.inkMuted,
     textAlign: "center",

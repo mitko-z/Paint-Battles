@@ -73,9 +73,9 @@ export default function LobbyScreen() {
   return (
     <View style={styles.root}>
       <LinearGradient
-        colors={["#F7F1E3", "#E8DCC4", "#F4A261"]}
-        start={{ x: 0.1, y: 0 }}
-        end={{ x: 0.9, y: 1 }}
+        colors={["#22354A", "#1B2A3D", "#0F1822"]}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
         style={StyleSheet.absoluteFill}
       />
       <VideoView
@@ -85,8 +85,14 @@ export default function LobbyScreen() {
         nativeControls={false}
         pointerEvents="none"
       />
-      {/* Light scrim so the ink-colored text/buttons stay legible over moving footage. */}
-      <View style={styles.videoScrim} />
+      {/* Dark vignette so the cream text/buttons stay legible over moving footage, while
+          the key art (painters, wordmark) up top stays visible rather than washed out. */}
+      <LinearGradient
+        colors={["rgba(15,22,32,0.05)", "rgba(15,22,32,0.55)", "rgba(15,22,32,0.93)"]}
+        locations={[0, 0.45, 1]}
+        style={styles.videoScrim}
+        pointerEvents="none"
+      />
       <Screen style={{ backgroundColor: "transparent" }}>
         <BrandTitle />
         <Text style={styles.hello}>
@@ -195,16 +201,16 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: "rgba(247, 241, 227, 0.55)",
   },
   hello: {
-    fontFamily: fonts.display,
-    fontSize: 22,
+    fontFamily: fonts.bodySemiBold,
+    fontSize: 17,
     color: colors.ink,
     marginBottom: 4,
   },
   record: {
-    color: colors.inkMuted,
+    fontFamily: fonts.body,
+    color: colors.gold,
     marginBottom: 24,
     fontSize: 15,
   },
@@ -221,16 +227,17 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 52,
     borderWidth: 1.5,
-    borderColor: colors.ink,
+    borderColor: colors.gold,
     borderRadius: 10,
     paddingHorizontal: 14,
     fontSize: 18,
     letterSpacing: 3,
-    fontWeight: "700",
+    fontFamily: fonts.bodyBold,
     color: colors.ink,
-    backgroundColor: colors.paper,
+    backgroundColor: colors.paperDeep,
   },
   warn: {
+    fontFamily: fonts.body,
     color: colors.danger,
     fontSize: 15,
     lineHeight: 22,
