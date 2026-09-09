@@ -324,7 +324,7 @@ export default function MatchScreen() {
 
   if (!match) {
     return (
-      <Screen>
+      <Screen scroll={false}>
         <Text style={styles.meta}>Loading match…</Text>
         <ErrorText message={error} />
       </Screen>
@@ -335,7 +335,7 @@ export default function MatchScreen() {
   const showCanvas = match.status === "countdown" || match.status === "drawing";
 
   return (
-    <Screen style={styles.screen}>
+    <Screen style={styles.screen} scroll={false}>
       <View style={styles.top}>
         <Text style={styles.promptLabel}>Draw</Text>
         <Text style={styles.prompt}>{match.prompt}</Text>
@@ -368,11 +368,15 @@ export default function MatchScreen() {
       </View>
 
       {showCanvas ? (
-        <>
+        // Row, not a stack: landscape phones are short on height, not width.
+        // The canvas takes whatever width is left; the tool buttons live in a
+        // fixed-width sidebar beside it instead of a row below it, so they're
+        // never competing with the canvas for the same scarce vertical space.
+        <View style={styles.body}>
           <View style={styles.canvasWrap}>
             <DrawingCanvas ref={canvasRef} tool={tool} disabled={!drawingOpen || submitting} />
           </View>
-          <View style={styles.tools}>
+          <View style={styles.sidebar}>
             <PrimaryButton
               label="Pen"
               style={styles.toolBtn}
@@ -393,7 +397,7 @@ export default function MatchScreen() {
               onPress={() => void doSubmit()}
             />
           </View>
-        </>
+        </View>
       ) : (
         <View style={styles.waitBox}>
           <Text style={styles.waitText}>
@@ -416,10 +420,11 @@ export default function MatchScreen() {
 
 const styles = StyleSheet.create({
   screen: {
-    paddingTop: 48,
+    paddingTop: 28,
+    paddingBottom: 16,
   },
   top: {
-    marginBottom: 12,
+    marginBottom: 8,
   },
   promptLabel: {
     fontFamily: fonts.bodyBold,
@@ -452,24 +457,31 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.danger,
   },
+  body: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 10,
+  },
   canvasWrap: {
     flex: 1,
-    minHeight: 280,
-    marginTop: 4,
     borderRadius: 10,
     borderWidth: 3,
     borderColor: colors.paperDeep,
     overflow: "hidden",
     transform: [{ rotate: "-0.4deg" }],
   },
-  tools: {
-    flexDirection: "row",
+  // Fixed-width column beside the canvas rather than a row below it - see the
+  // comment above the JSX that renders these. Buttons default to a plain
+  // (non-flex) column, which stretches each to the sidebar's width and stacks
+  // them at their natural ~52px height with the gap below, rather than forcing
+  // them to fight the canvas for vertical space.
+  sidebar: {
+    width: 140,
+    justifyContent: "center",
     gap: 8,
-    marginTop: 12,
   },
   toolBtn: {
-    flex: 1,
-    paddingHorizontal: 8,
+    width: "100%",
   },
   meta: {
     fontFamily: fonts.body,

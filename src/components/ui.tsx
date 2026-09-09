@@ -1,6 +1,7 @@
 import {
   ActivityIndicator,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -16,11 +17,27 @@ import { colors, fonts } from "@/lib/theme";
 export function Screen({
   children,
   style,
+  scroll = true,
 }: {
   children: React.ReactNode;
   style?: ViewStyle;
+  /** Screens with their own gesture-sensitive layout (the drawing canvas'
+   * touch handling) opt out - see app/match/[id].tsx. Every other screen
+   * gets this for free: on a short landscape phone, content that doesn't
+   * fit becomes scrollable instead of literally unreachable below the
+   * viewport. When content already fits (the common case), this is a
+   * no-op - flexGrow on the content container plus flex:1 on the inner
+   * View is the standard RN idiom for "fill the screen, but scroll if you
+   * can't." */
+  scroll?: boolean;
 }) {
-  return <View style={[styles.screen, style]}>{children}</View>;
+  const content = <View style={[styles.screen, style]}>{children}</View>;
+  if (!scroll) return content;
+  return (
+    <ScrollView style={styles.scrollFill} contentContainerStyle={styles.scrollContent}>
+      {content}
+    </ScrollView>
+  );
 }
 
 // "Battle Poster" wordmark treatment: React Native's Text only supports a single
@@ -196,6 +213,12 @@ export function Divider({ label }: { label?: string }) {
 }
 
 const styles = StyleSheet.create({
+  scrollFill: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
   screen: {
     flex: 1,
     backgroundColor: colors.paper,

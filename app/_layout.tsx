@@ -3,6 +3,7 @@ import { StatusBar } from "expo-status-bar";
 import { useFonts } from "expo-font";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { AuthProvider } from "@/features/auth/AuthProvider";
+import { OrientationGate } from "@/components/OrientationGate";
 import { colors } from "@/lib/theme";
 
 // Battle Poster direction's two typefaces (SIL OFL / Apache-licensed, bundled locally rather
@@ -29,7 +30,9 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.ink }}>
       <AuthProvider>
         <StatusBar style="light" />
-        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.ink } }} />
+        <OrientationGate>
+          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.ink } }} />
+        </OrientationGate>
       </AuthProvider>
     </GestureHandlerRootView>
   );

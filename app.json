@@ -3,7 +3,7 @@
     "name": "Drawing-Battle",
     "slug": "drawing-battle",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "landscape",
     "icon": "./assets/icon.png",
     "scheme": "drawingbattle",
     "userInterfaceStyle": "light",
