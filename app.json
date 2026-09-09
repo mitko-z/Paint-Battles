@@ -3,7 +3,7 @@
     "name": "Drawing-Battle",
     "slug": "drawing-battle",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "landscape",
     "icon": "./assets/icon.png",
     "scheme": "drawingbattle",
     "userInterfaceStyle": "light",
@@ -33,7 +33,9 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-video",
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true,

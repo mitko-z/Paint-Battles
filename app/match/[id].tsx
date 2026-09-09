@@ -16,6 +16,14 @@ import {
 import { useServerCountdown } from "@/features/match/useServerCountdown";
 import type { Match } from "@/lib/types";
 import { colors, fonts } from "@/lib/theme";
+import { useAudioPlayer } from "expo-audio";
+
+// Cue sounds for the match timer. useAudioPlayer() starts loading its source as soon as
+// it is called, so mounting these hooks up front (even before they are needed) is what
+// preloads them - by the time the countdown phase starts, playback is instant.
+const threeTwoOneAudio = require("../../assets/3-2-1.mp3");
+const whistleAudio = require("../../assets/whistle.wav");
+const clockTickAudio = require("../../assets/clock-tick.mp3");
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -46,6 +54,18 @@ export default function MatchScreen() {
   // effect further down.
   const matchRef = useRef<Match | null>(null);
   const foregroundedRef = useRef(true);
+
+  // Preloaded up front (see the requires above); played on cue by the effects below.
+  const threeTwoOnePlayer = useAudioPlayer(threeTwoOneAudio);
+  const whistlePlayer = useAudioPlayer(whistleAudio);
+  const clockTickPlayer = useAudioPlayer(clockTickAudio);
+  // Guards the 3-2-1 cue so it fires exactly once per match, the moment the countdown
+  // phase is first observed - not on every re-render while status stays "countdown".
+  const countdownCueFiredRef = useRef(false);
+  // Same one-shot pattern for the "10 seconds left" tick during the drawing phase.
+  const tickCueFiredRef = useRef(false);
+  // Same one-shot pattern for the "time's up" whistle at the end of the drawing phase.
+  const timeUpCueFiredRef = useRef(false);
 
   const countdown = useServerCountdown(match?.countdown_ends_at);
   const drawingClock = useServerCountdown(match?.drawing_ends_at);
@@ -166,6 +186,85 @@ export default function MatchScreen() {
     }
   }, [match, countdown.isDone, drawingClock.isDone, refresh]);
 
+  // "10 seconds left" warning: fires once, the moment the drawing phase's remaining
+  // time first reads 10s or less. clock-tick.mp3 is ~10s long by design, timed to run
+  // out right around when the time-up whistle below fires - but it's explicitly paused
+  // there (and whenever we leave "drawing" for any other reason) rather than relying on
+  // that timing, since a network hiccup or an early opponent submit can end the phase
+  // before the clip finishes on its own.
+  useEffect(() => {
+    if (!match) return;
+    if (
+      match.status === "drawing" &&
+      !tickCueFiredRef.current &&
+      drawingClock.remainingSec <= 10 &&
+      drawingClock.remainingSec > 0
+    ) {
+      tickCueFiredRef.current = true;
+      clockTickPlayer.seekTo(0);
+      clockTickPlayer.play();
+    }
+    // Reset the guard once we leave drawing, so a rematch on this same screen
+    // instance can play the cue again - and stop the tick itself: it's ~10s long
+    // and would otherwise keep playing on into the submitting/judging screens.
+    if (match.status !== "drawing") {
+      tickCueFiredRef.current = false;
+      clockTickPlayer.pause();
+    }
+  }, [match, drawingClock.remainingSec, clockTickPlayer]);
+
+  // "Time's up" whistle: fires once, the moment the drawing phase's shared timer
+  // hits zero. Reuses whistlePlayer (already used for the countdown->drawing cue) -
+  // the two are far enough apart in the match timeline not to collide.
+  useEffect(() => {
+    if (!match) return;
+    if (
+      match.status === "drawing" &&
+      drawingClock.isDone &&
+      !timeUpCueFiredRef.current
+    ) {
+      timeUpCueFiredRef.current = true;
+      // Cut the still-playing tick before the whistle - otherwise the two overlap
+      // for however much of the ~10s tick clip is left.
+      clockTickPlayer.pause();
+      whistlePlayer.seekTo(0);
+      whistlePlayer.play();
+    }
+    // Reset the guard once we leave drawing, so a rematch on this same screen
+    // instance can play the cue again.
+    if (match.status !== "drawing") {
+      timeUpCueFiredRef.current = false;
+    }
+  }, [match, drawingClock.isDone, whistlePlayer, clockTickPlayer]);
+
+  // "3-2-1, prepare!" cue: fires once, the moment the match enters its 3-second
+  // countdown phase. There is no video for this yet (audio-only for now, by design).
+  useEffect(() => {
+    if (!match) return;
+    if (match.status === "countdown" && !countdownCueFiredRef.current) {
+      countdownCueFiredRef.current = true;
+      threeTwoOnePlayer.seekTo(0);
+      threeTwoOnePlayer.play();
+    }
+    // Reset the guard once we leave countdown, so a rematch/new match on this same
+    // screen instance can play the cue again.
+    if (match.status !== "countdown") {
+      countdownCueFiredRef.current = false;
+    }
+  }, [match, threeTwoOnePlayer]);
+
+  // Whistle plays right after the 3-2-1 cue finishes, not on a fixed delay - this way
+  // it stays in sync even if the 3-2-1 clip's own length ever changes.
+  useEffect(() => {
+    const sub = threeTwoOnePlayer.addListener("playbackStatusUpdate", (status) => {
+      if (status.didJustFinish) {
+        whistlePlayer.seekTo(0);
+        whistlePlayer.play();
+      }
+    });
+    return () => sub.remove();
+  }, [threeTwoOnePlayer, whistlePlayer]);
+
   const doSubmit = useCallback(async () => {
     if (!match || !user || submittedRef.current) return;
     submittedRef.current = true;
@@ -225,7 +324,7 @@ export default function MatchScreen() {
 
   if (!match) {
     return (
-      <Screen>
+      <Screen scroll={false}>
         <Text style={styles.meta}>Loading match…</Text>
         <ErrorText message={error} />
       </Screen>
@@ -236,7 +335,7 @@ export default function MatchScreen() {
   const showCanvas = match.status === "countdown" || match.status === "drawing";
 
   return (
-    <Screen style={styles.screen}>
+    <Screen style={styles.screen} scroll={false}>
       <View style={styles.top}>
         <Text style={styles.promptLabel}>Draw</Text>
         <Text style={styles.prompt}>{match.prompt}</Text>
@@ -244,7 +343,14 @@ export default function MatchScreen() {
           <Text style={styles.timer}>Starting in {Math.max(countdown.remainingSec, 0)}</Text>
         ) : null}
         {match.status === "drawing" ? (
-          <Text style={styles.timer}>
+          <Text
+            style={[
+              styles.timer,
+              !hasSubmitted && drawingClock.remainingSec <= 10 && drawingClock.remainingSec > 0
+                ? styles.timerUrgent
+                : null,
+            ]}
+          >
             {hasSubmitted
               ? match.is_solo
                 ? "Submitted!"
@@ -262,11 +368,15 @@ export default function MatchScreen() {
       </View>
 
       {showCanvas ? (
-        <>
+        // Row, not a stack: landscape phones are short on height, not width.
+        // The canvas takes whatever width is left; the tool buttons live in a
+        // fixed-width sidebar beside it instead of a row below it, so they're
+        // never competing with the canvas for the same scarce vertical space.
+        <View style={styles.body}>
           <View style={styles.canvasWrap}>
             <DrawingCanvas ref={canvasRef} tool={tool} disabled={!drawingOpen || submitting} />
           </View>
-          <View style={styles.tools}>
+          <View style={styles.sidebar}>
             <PrimaryButton
               label="Pen"
               style={styles.toolBtn}
@@ -287,7 +397,7 @@ export default function MatchScreen() {
               onPress={() => void doSubmit()}
             />
           </View>
-        </>
+        </View>
       ) : (
         <View style={styles.waitBox}>
           <Text style={styles.waitText}>
@@ -310,49 +420,71 @@ export default function MatchScreen() {
 
 const styles = StyleSheet.create({
   screen: {
-    paddingTop: 48,
+    paddingTop: 28,
+    paddingBottom: 16,
   },
   top: {
-    marginBottom: 12,
+    marginBottom: 8,
   },
   promptLabel: {
-    color: colors.inkMuted,
+    fontFamily: fonts.bodyBold,
+    color: colors.gold,
     textTransform: "uppercase",
     letterSpacing: 1.5,
     fontSize: 12,
-    fontWeight: "700",
   },
   prompt: {
     fontFamily: fonts.display,
-    fontSize: 36,
+    fontSize: 26,
+    lineHeight: 30,
     color: colors.ink,
     marginTop: 4,
   },
   timer: {
     marginTop: 6,
-    fontSize: 22,
-    fontWeight: "800",
-    color: colors.accentDark,
+    fontFamily: fonts.bodyBold,
+    fontSize: 20,
+    color: colors.ink,
+  },
+  // Once 10s or less remain, the countdown itself carries the urgency - matching the
+  // clock-tick.mp3 warning cue that fires at the same threshold.
+  timerUrgent: {
+    color: colors.accent,
   },
   closeWarning: {
     marginTop: 6,
+    fontFamily: fonts.body,
     fontSize: 13,
     color: colors.danger,
   },
+  body: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 10,
+  },
   canvasWrap: {
     flex: 1,
-    minHeight: 280,
+    borderRadius: 10,
+    borderWidth: 3,
+    borderColor: colors.paperDeep,
+    overflow: "hidden",
+    transform: [{ rotate: "-0.4deg" }],
   },
-  tools: {
-    flexDirection: "row",
+  // Fixed-width column beside the canvas rather than a row below it - see the
+  // comment above the JSX that renders these. Buttons default to a plain
+  // (non-flex) column, which stretches each to the sidebar's width and stacks
+  // them at their natural ~52px height with the gap below, rather than forcing
+  // them to fight the canvas for vertical space.
+  sidebar: {
+    width: 140,
+    justifyContent: "center",
     gap: 8,
-    marginTop: 12,
   },
   toolBtn: {
-    flex: 1,
-    paddingHorizontal: 8,
+    width: "100%",
   },
   meta: {
+    fontFamily: fonts.body,
     color: colors.inkMuted,
   },
   waitBox: {
@@ -361,6 +493,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   waitText: {
+    fontFamily: fonts.bodySemiBold,
     fontSize: 18,
     color: colors.inkMuted,
     textAlign: "center",
