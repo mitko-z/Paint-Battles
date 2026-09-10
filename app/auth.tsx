@@ -101,6 +101,7 @@ export default function AuthScreen() {
         />
         <PrimaryButton
           label={mode === "signup" ? "Create account" : "Send sign-in link"}
+          variant="secondary"
           onPress={submitEmail}
           disabled={!emailValid}
           loading={busy === "email"}
@@ -138,7 +139,7 @@ export default function AuthScreen() {
 
       <PrimaryButton
         label="Continue as guest"
-        variant="ghost"
+        variant="secondary"
         style={styles.guestBtn}
         onPress={() => router.replace("/lobby")}
       />
