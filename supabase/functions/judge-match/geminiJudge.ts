@@ -303,6 +303,21 @@ export function createGeminiJudge(
 
 type InlineImage = { base64: string; mimeType: string };
 
+/**
+ * Create a specific system prompt based on if used for single or for two images
+ */
+const buildSystemPrompt = (areTwoSketches: boolean): string => {
+  let jsonFormat = areTwoSketches ? 
+               '{"scoreA":0-100,"scoreB":0-100,"winner":"A"|"B"|"draw","rationaleA":"short","rationaleB":"short"}' :
+               '{"score":0-100,"rationale":"short"}';
+  return `You are a fair judge for a 1-minute drawing contest where just a pen (a black line) and an eraser tools are used.
+Score how well ${areTwoSketches ? "each" : "this"} sketch depicts the prompt subject by evaluating between 0 and 100: 
+- 0 - nothing is drawn;
+- 100 - a masterpiece.
+Return ONLY compact JSON, no markdown fences:
+${jsonFormat}`;
+};
+
 async function callGemini(
   apiKey: string,
   prompt: string,
@@ -310,11 +325,7 @@ async function callGemini(
   imageB: InlineImage,
   timeoutMs: number,
 ): Promise<VisionJudgeResult> {
-  const system =
-    `You are a fair judge for a 1-minute doodle contest.
-Score how well each sketch depicts the prompt subject — NOT artistic skill.
-Return ONLY compact JSON, no markdown fences:
-{"scoreA":0-100,"scoreB":0-100,"winner":"A"|"B"|"draw","rationaleA":"short","rationaleB":"short"}`;
+  const system = buildSystemPrompt(true);
 
   const controller = new AbortController();
   let timedOut = false;
@@ -397,11 +408,7 @@ async function callGeminiSolo(
   image: InlineImage,
   timeoutMs: number,
 ): Promise<VisionSoloJudgeResult> {
-  const system =
-    `You are a fair judge for a 1-minute doodle contest.
-Score how well this sketch depicts the prompt subject — NOT artistic skill.
-Return ONLY compact JSON, no markdown fences:
-{"score":0-100,"rationale":"short"}`;
+  const system = buildSystemPrompt(false);
 
   const controller = new AbortController();
   let timedOut = false;
