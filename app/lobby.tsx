@@ -124,6 +124,7 @@ export default function LobbyScreen() {
           />
           <PrimaryButton
             label="Find opponent"
+            variant="secondary"
             loading={busy}
             onPress={() =>
               withAuth(async () => {
@@ -168,13 +169,13 @@ export default function LobbyScreen() {
           {profile?.is_guest ? (
             <PrimaryButton
               label="Sign in"
-              variant="ghost"
+              variant="secondary"
               onPress={() => router.push("/auth")}
             />
           ) : null}
           <PrimaryButton
             label="Profile"
-            variant="ghost"
+            variant="secondary"
             onPress={() => router.push("/profile")}
           />
         </View>
