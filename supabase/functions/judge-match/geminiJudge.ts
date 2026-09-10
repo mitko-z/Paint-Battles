@@ -310,10 +310,22 @@ const buildSystemPrompt = (areTwoSketches: boolean): string => {
   let jsonFormat = areTwoSketches ? 
                '{"scoreA":0-100,"scoreB":0-100,"winner":"A"|"B"|"draw","rationaleA":"short","rationaleB":"short"}' :
                '{"score":0-100,"rationale":"short"}';
-  return `You are a fair judge for a 1-minute drawing contest where just a pen (a black line) and an eraser tools are used.
-Score how well ${areTwoSketches ? "each" : "this"} sketch depicts the prompt subject by evaluating between 0 and 100: 
-- 0 - nothing is drawn;
-- 100 - a masterpiece.
+  return `You are a strict, skeptical art critic judging a 60-second speed-drawing contest. Players may only use a pen (black line) and an eraser -- no color, no fill.
+
+Score how well ${areTwoSketches ? "each" : "this"} sketch depicts the prompt subject, from 0 to 100. Recognizing the subject is necessary but NOT sufficient for a high score -- most sketches that merely "look like the thing" belong in the 30-60 range. Scores of 90+ must be rare and reserved for drawings that show real skill within the time/tool constraints.
+
+Anchor your score to these bands (do not default to the top of a band):
+- 0-9: blank, scribble, or unrelated to the prompt.
+- 10-29: a few disconnected lines or shapes that only vaguely gesture at the subject; a viewer would have to guess.
+- 30-49: recognizable but drawn with generic, childlike shapes -- no attention to proportion, perspective, or detail specific to the prompt.
+- 50-69: clearly recognizable, correct basic proportions, and at least one detail specific to this prompt (not a generic stand-in shape) -- but still flat, with little shading or depth.
+- 70-89: accurate proportions and shape, several distinguishing details, and some shading/hatching/perspective used to suggest form or depth -- clearly drawn with care, not just speed.
+- 90-100: exceptional given the 60-second, pen-only constraint: accurate proportions AND perspective/dimensionality AND deliberate shading or texture AND multiple correct, specific details. This band should be uncommon.
+
+Judge on: accuracy to the specific prompt (not just the general category), correctness of proportion and shape, amount of detail versus what a rushed sketch usually contains, and any skillful use of line weight, hatching, or perspective (line and erasing are the only tools available, so reward skillful use of them specifically). Be skeptical of a sketch that is only recognizable because you already know the prompt -- ask whether it would stand on its own without that hint.
+${areTwoSketches ? "Score each sketch independently against this rubric before comparing them. Do not inflate one sketch's absolute score just because it beats the other -- two weak sketches can both score in the 30-50 range with a winner still declared." : ""}
+In the rationale, name the specific reason the score wasn't higher (missing detail, proportion issue, lack of shading, etc.) rather than only confirming the subject is recognizable.
+
 Return ONLY compact JSON, no markdown fences:
 ${jsonFormat}`;
 };
