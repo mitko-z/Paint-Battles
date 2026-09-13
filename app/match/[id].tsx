@@ -14,6 +14,7 @@ import {
   uploadDrawingPng,
 } from "@/features/match/api";
 import { useServerCountdown } from "@/features/match/useServerCountdown";
+import { syncClockOffset } from "@/features/match/clockOffset";
 import type { Match } from "@/lib/types";
 import { colors, fonts } from "@/lib/theme";
 import { useAudioPlayer } from "expo-audio";
@@ -97,6 +98,11 @@ export default function MatchScreen() {
       return;
     }
     void refresh().catch((e) => setError(e instanceof Error ? e.message : "Load failed"));
+    // Clock-offset hardening (2026-09-13, see clockOffset.ts): measure this
+    // device's skew against the DB's clock up front, before the countdown
+    // ever renders, so drawing_ends_at/countdown_ends_at are read against a
+    // corrected clock from the very first tick, not just from the first poll.
+    void syncClockOffset();
     const unsub = subscribeToMatch(id, (next) => {
       setMatch(next);
       if (next.status === "results") {
@@ -118,6 +124,10 @@ export default function MatchScreen() {
     const poll = setInterval(() => {
       void refresh();
       sendHeartbeat();
+      // Resync on the same 2s cadence — comfortably inside R1.2's "at least
+      // every 15s" and cheap, since it's one more lightweight RPC alongside
+      // the poll's existing getMatch() round trip.
+      void syncClockOffset();
     }, 2000);
     return () => {
       unsub();
@@ -213,16 +223,32 @@ export default function MatchScreen() {
     }
   }, [match, drawingClock.remainingSec, clockTickPlayer]);
 
-  // "Time's up" whistle: fires once, the moment the drawing phase's shared timer
-  // hits zero. Reuses whistlePlayer (already used for the countdown->drawing cue) -
-  // the two are far enough apart in the match timeline not to collide.
+  // "Time's up" whistle: fires once, the moment the drawing phase ends.
+  // Reuses whistlePlayer (already used for the countdown->drawing cue) - the
+  // two are far enough apart in the match timeline not to collide.
+  //
+  // Fires on *either* signal that the drawing phase is over: this client's
+  // own (now clock-offset-corrected, see clockOffset.ts) local timer
+  // reaching isDone, OR match.status having already moved past "drawing" —
+  // whichever arrives first. Previously this required status === "drawing"
+  // AND isDone to be true at the same instant, which silently swallowed the
+  // whistle under client/server clock skew: the server's own clock drives
+  // advance_match_phases()'s drawing->submitting transition independently
+  // of this device's clock, so a lagging local timer could still read
+  // isDone === false for a couple more seconds after status had already
+  // flipped to "submitting" via poll/realtime - by which point this
+  // condition's "status === drawing" half was permanently false and the
+  // whistle never got its one chance to fire. Reset ahead of the *next*
+  // drawing phase (on "countdown", not on leaving "drawing") so the fire
+  // and the reset can't race each other the same way.
   useEffect(() => {
     if (!match) return;
-    if (
-      match.status === "drawing" &&
-      drawingClock.isDone &&
-      !timeUpCueFiredRef.current
-    ) {
+    const drawingPhaseOver =
+      match.status === "submitting" ||
+      match.status === "judging" ||
+      match.status === "results" ||
+      (match.status === "drawing" && drawingClock.isDone);
+    if (drawingPhaseOver && !timeUpCueFiredRef.current) {
       timeUpCueFiredRef.current = true;
       // Cut the still-playing tick before the whistle - otherwise the two overlap
       // for however much of the ~10s tick clip is left.
@@ -230,9 +256,7 @@ export default function MatchScreen() {
       whistlePlayer.seekTo(0);
       whistlePlayer.play();
     }
-    // Reset the guard once we leave drawing, so a rematch on this same screen
-    // instance can play the cue again.
-    if (match.status !== "drawing") {
+    if (match.status === "countdown") {
       timeUpCueFiredRef.current = false;
     }
   }, [match, drawingClock.isDone, whistlePlayer, clockTickPlayer]);
@@ -332,7 +356,20 @@ export default function MatchScreen() {
   }
 
   const drawingOpen = match.status === "drawing" && !hasSubmitted;
-  const showCanvas = match.status === "countdown" || match.status === "drawing";
+  // Keep the canvas mounted through "submitting" until *this* client has
+  // actually captured and submitted its own drawing. Without the extra
+  // clause, a server-driven status flip to "submitting" (which can arrive,
+  // via poll/realtime, before this device's own clock-skewed local timer
+  // notices the drawing phase ended - see clockOffset.ts) unmounts
+  // DrawingCanvas the instant it's observed, nulling canvasRef.current
+  // before doSubmit()'s exportPngBase64() call runs - the exact cause of
+  // the "Could not capture drawing" error. disabled (below) still blocks
+  // further input the moment the phase ends, so this only keeps the
+  // already-drawn canvas alive long enough to be captured, not editable.
+  const showCanvas =
+    match.status === "countdown" ||
+    match.status === "drawing" ||
+    (match.status === "submitting" && !hasSubmitted);
 
   return (
     <Screen style={styles.screen} scroll={false}>
