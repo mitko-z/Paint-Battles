@@ -94,15 +94,21 @@ export default function LobbyScreen() {
         pointerEvents="none"
       />
       <Screen style={{ backgroundColor: "transparent" }}>
-        <BrandTitle />
-        <Text style={styles.hello}>
-          {profile ? `Playing as ${profile.display_name}` : user ? "Signing in…" : "Ready when you are"}
-        </Text>
-        {profile ? (
-          <Text style={styles.record}>
-            {profile.wins}W · {profile.losses}L
+        {/* Semi-transparent scrim behind the wordmark/tagline/identity block so it
+            stays legible over the moving background video regardless of which frame
+            happens to be showing - the videoScrim gradient above fades in gradually
+            and isn't enough contrast this high up the screen. */}
+        <View style={styles.headerCard}>
+          <BrandTitle />
+          <Text style={styles.hello}>
+            {profile ? `Playing as ${profile.display_name}` : user ? "Signing in…" : "Ready when you are"}
           </Text>
-        ) : null}
+          {profile ? (
+            <Text style={styles.record}>
+              {profile.wins}W · {profile.losses}L
+            </Text>
+          ) : null}
+        </View>
 
         {/* configWarning is a config-mismatch diagnosis (see src/lib/supabase.ts),
             not a reason to hide the actions below — the buttons stay live and
@@ -203,6 +209,16 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
   },
+  headerCard: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(11, 17, 26, 0.55)",
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 12,
+    marginBottom: 24,
+    maxWidth: "100%",
+  },
   hello: {
     fontFamily: fonts.bodySemiBold,
     fontSize: 17,
@@ -212,7 +228,6 @@ const styles = StyleSheet.create({
   record: {
     fontFamily: fonts.body,
     color: colors.gold,
-    marginBottom: 24,
     fontSize: 15,
   },
   actions: {
