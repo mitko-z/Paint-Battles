@@ -392,6 +392,7 @@ export default function MatchScreen() {
             <PrimaryButton
               label={hasSubmitted ? "Submitted" : "Submit"}
               style={styles.toolBtn}
+              variant="secondary"
               disabled={!drawingOpen || submitting}
               loading={submitting}
               onPress={() => void doSubmit()}
